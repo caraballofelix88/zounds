@@ -23,7 +23,7 @@ pub const SampleFormat = enum {
 
 pub const Context = struct {
     pub const Config = struct {
-        sample_format: type,
+        sample_format: SampleFormat,
         sample_rate: u32,
         channel_count: u8,
         frames_per_packet: u8,
@@ -32,7 +32,7 @@ pub const Context = struct {
 
 const ChannelPosition = enum { left, right };
 
-const Device = struct { ptr: *anyopaque, name: []u8, channels: []ChannelPosition, sample_rate: u24, sample_fmt: SampleFormat };
+pub const Device = struct { ptr: *anyopaque, name: []u8, channels: []ChannelPosition, sample_rate: u24, sample_fmt: SampleFormat };
 
 pub fn doTheThing() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

@@ -42,7 +42,7 @@ pub const Context = struct {
     device: *c.AudioComponent,
     audioUnit: *c.AudioUnit,
     input: *c.AURenderCallbackStruct,
-    source: *anyopaque = &iter, // TODO: clean this up
+    // source: *anyopaque = &iter, // TODO: clean this up
 
     devices: []main.Device,
 
@@ -167,9 +167,11 @@ pub const Context = struct {
         while (frame < num_samples) : (frame += 2) {
             // Where should we determine source audio format? Here, on render?
             // chunk 2 samples at once
-            const fromIter = iter.next();
-            buf[frame] = fromIter;
-            buf[frame + 1] = fromIter; //std.math.shr(f64, fromIter, 32) | fromIter;
+            const fromIterL = iterL.next();
+            const fromIterL2 = iterL2.next();
+            const fromIterR = iterR.next();
+            buf[frame] = (fromIterL + fromIterL2);
+            buf[frame + 1] = fromIterR; //std.math.shr(f64, fromIter, 32) | fromIter;
         }
 
         return c.noErr;
@@ -199,6 +201,8 @@ const Player = struct {
     fn stop() void {}
 
     fn deinit() void {}
+
+    // NEXT UP: flesh out player, pause/stop, passing in audio source
 };
 
 // Manages signal composition
@@ -217,7 +221,9 @@ fn osStatusHandler(result: c.OSStatus) !void {
     }
 }
 
-var iter = osc.SineIterator(0.5, 445.0, 44100){};
+var iterL = osc.SineIterator(0.5, 440.0, 44100){};
+var iterR = osc.SineIterator(0.5, 444.0, 44100){};
+var iterL2 = osc.SineIterator(0.5, 490.0, 44100){};
 
 test "basic check for leaks" {
     var alloc = std.testing.allocator;
