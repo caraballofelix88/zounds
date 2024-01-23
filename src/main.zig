@@ -44,7 +44,15 @@ pub fn doTheThing() !void {
     std.debug.print("what is playercontext, {}\n", .{playerContext});
     defer playerContext.deinit();
 
+    var player = playerContext.createPlayer();
+
+    player.play();
     std.log.debug("running", .{});
     std.time.sleep(2000 * std.time.ns_per_ms);
+    player.pause();
+    std.time.sleep(1000 * std.time.ns_per_ms);
+    player.play();
+
+    std.time.sleep(1000 * std.time.ns_per_ms);
     std.log.debug("done", .{});
 }

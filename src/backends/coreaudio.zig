@@ -114,11 +114,6 @@ pub const Context = struct {
 
         var ctx: Context = .{ .alloc = allocator, .acd = acd, .asbd = asbd, .audioUnit = audioUnit, .device = device, .input = input, .devices = &.{} };
 
-        // start player
-        osStatusHandler(c.AudioOutputUnitStart(audioUnit.*)) catch |err| {
-            std.debug.panic("failed to start audio unit: {}\n", .{err});
-        };
-
         return ctx;
     }
 
@@ -151,6 +146,7 @@ pub const Context = struct {
         _ = bus_number;
 
         // TODO: this can be format-independent if we count samples over byte by byte???
+        // byte-per-byte should resolve channel playback as well as format size
         var buf: [*]f32 = @ptrCast(@alignCast(buffer_list.?.*.mBuffers[0].mData));
 
         // TODO: handle amplitude/volume in player, not signal generators
@@ -179,7 +175,9 @@ pub const Context = struct {
 
     pub fn refresh() void {} // TODO: not sure what this is for yet, copypasted lol
 
-    pub fn createPlayer() void {}
+    pub fn createPlayer(self: Self) Player {
+        return .{ .alloc = self.alloc, .audio_unit = self.audioUnit, .is_playing = false, .ctx = &self };
+    }
 };
 
 fn freeDevice(device: main.Device) void {
@@ -193,12 +191,61 @@ fn freeDevice(device: main.Device) void {
 }
 
 // Controls audio context and interfaces playback actions
-const Player = struct {
+pub const Player = struct {
+    alloc: std.mem.Allocator,
+    audio_unit: *c.AudioUnit,
+    ctx: *const Context,
+    volume: f32 = 0.5, // useless for now
+    is_playing: bool,
+
+    // TODO: dont use @This() for concrete structs!
+    // https://zig.news/kristoff/dont-self-simple-structs-fj8
+    const Self = @This();
+
     fn init() void {}
 
-    fn play() void {}
+    pub fn play(self: *Player) void {
+        osStatusHandler(c.AudioOutputUnitStart(self.audio_unit.*)) catch |err| {
+            std.debug.print("uh oh, playing didn't work: {}\n", .{err});
+        };
 
-    fn stop() void {}
+        self.is_playing = false;
+    }
+
+    pub fn pause(self: *Player) void {
+        osStatusHandler(c.AudioOutputUnitStop(self.audio_unit.*)) catch |err| {
+            std.debug.print("uh oh, playing didn't work: {}\n", .{err});
+        };
+
+        self.is_playing = false;
+    }
+
+    pub fn setVolume(self: *Self, vol: f32) !void {
+        osStatusHandler(c.AudioUnitSetParameter(
+            self.audio_unit.*,
+            c.kHALOutputParam_Volume,
+            c.kAudioUnitScope_Global,
+            0,
+            vol,
+            0,
+        )) catch |err| {
+            std.debug.print("error setting volume: {}\n", .{err});
+        };
+    }
+
+    pub fn volume(self: *Self) !f32 {
+        var vol: f32 = 0;
+        osStatusHandler(c.AudioUnitGetParameter(
+            self.audio_unit.*,
+            c.kHALOutputParam_Volume,
+            c.kAudioUnitScope_Global,
+            0,
+            &vol,
+        )) catch |err| {
+            std.debug.print("error retrieving volume: {}\n", .{err});
+        };
+        return vol;
+    }
 
     fn deinit() void {}
 
