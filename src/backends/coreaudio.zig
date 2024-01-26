@@ -52,7 +52,7 @@ pub const Context = struct {
         // var ctx = try allocator.create(Context);
         // errdefer allocator.destroy(ctx);
 
-        var acd = try allocator.create(c.AudioComponentDescription);
+        const acd = try allocator.create(c.AudioComponentDescription);
 
         acd.* = c.AudioComponentDescription{
             .componentType = c.kAudioUnitType_Output,
@@ -63,18 +63,18 @@ pub const Context = struct {
         };
 
         // get next available audio component
-        var device = try allocator.create(c.AudioComponent);
+        const device = try allocator.create(c.AudioComponent);
         device.* = c.AudioComponentFindNext(null, acd) orelse {
             std.debug.panic("error finding device \n", .{});
         };
 
         // capture audio unit instance for device
-        var audioUnit = try allocator.create(c.AudioUnit);
+        const audioUnit = try allocator.create(c.AudioUnit);
         osStatusHandler(c.AudioComponentInstanceNew(device.*, audioUnit)) catch |err| {
             std.debug.panic("audio component instance failed: {}\n", .{err});
         };
 
-        var input = try allocator.create(c.AURenderCallbackStruct);
+        const input = try allocator.create(c.AURenderCallbackStruct);
         input.* = c.AURenderCallbackStruct{
             .inputProc = &renderCallback,
             .inputProcRefCon = std.mem.zeroes(?*anyopaque), // TODO: pass in a reference to the player here, instead
@@ -85,7 +85,7 @@ pub const Context = struct {
             std.debug.panic("failed to set render callback: {}\n", .{err});
         };
 
-        var asbd = try allocator.create(c.AudioStreamBasicDescription);
+        const asbd = try allocator.create(c.AudioStreamBasicDescription);
 
         // TODO: we can pull channel descriptions from the
         // Get StreamDescription from context config
@@ -112,7 +112,7 @@ pub const Context = struct {
             std.debug.panic("failed to initialize: {}\n", .{err});
         };
 
-        var ctx: Context = .{ .alloc = allocator, .acd = acd, .asbd = asbd, .audioUnit = audioUnit, .device = device, .input = input, .devices = &.{} };
+        const ctx: Context = .{ .alloc = allocator, .acd = acd, .asbd = asbd, .audioUnit = audioUnit, .device = device, .input = input, .devices = &.{} };
 
         return ctx;
     }
@@ -273,7 +273,7 @@ var iterR = osc.SineIterator(0.5, 444.0, 44100){};
 var iterL2 = osc.SineIterator(0.5, 490.0, 44100){};
 
 test "basic check for leaks" {
-    var alloc = std.testing.allocator;
+    const alloc = std.testing.allocator;
 
     const config = main.Context.Config{ .sample_format = f32, .sample_rate = default_sample_rate, .channel_count = 2, .frames_per_packet = 1 };
     const playerContext = try Context.init(alloc, config);

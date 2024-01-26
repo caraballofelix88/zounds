@@ -36,7 +36,7 @@ pub const Device = struct { ptr: *anyopaque, name: []u8, channels: []ChannelPosi
 
 pub fn doTheThing() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var alloc = gpa.allocator();
+    const alloc = gpa.allocator();
 
     const config = Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
     const playerContext = try coreaudio.Context.init(alloc, config);
