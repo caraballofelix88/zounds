@@ -1,5 +1,7 @@
 const std = @import("std");
 const coreaudio = @import("backends/coreaudio.zig");
+const sources = @import("sources/main.zig");
+const osc = @import("sources/osc.zig");
 
 pub const SampleFormat = enum {
     f32,
@@ -41,18 +43,25 @@ pub fn doTheThing() !void {
     const config = Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
     const playerContext = try coreaudio.Context.init(alloc, config);
 
-    std.debug.print("what is playercontext, {}\n", .{playerContext});
+    std.debug.print("Context:\n{}\n", .{playerContext});
     defer playerContext.deinit();
 
-    var player = playerContext.createPlayer();
+    var source = try sources.SampleSource.init(alloc, "res/nicer_laugh.wav");
+    // TODO: sample source deinit
 
+    comptime var wavIterator = osc.WavetableIterator{ .wavetable = @constCast(&osc.waveTable), .pitch = 440.0, .sample_rate = 44_100 };
+
+    var player = try playerContext.createPlayer(@constCast(&source.source()));
+
+    _ = try player.setVolume(0.5);
     player.play();
     std.log.debug("running", .{});
     std.time.sleep(2000 * std.time.ns_per_ms);
     player.pause();
+    player.setAudioSource(@constCast(&wavIterator.source()));
     std.time.sleep(1000 * std.time.ns_per_ms);
     player.play();
 
-    std.time.sleep(1000 * std.time.ns_per_ms);
+    std.time.sleep(5000 * std.time.ns_per_ms);
     std.log.debug("done", .{});
 }
