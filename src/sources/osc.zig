@@ -30,13 +30,14 @@ pub fn SineIterator(comptime amplitude: f32, comptime pitch: f32, comptime sampl
 }
 
 // TODO: provide a sample generator function?
+// TODO: you only really need to hold onto samples for [0, pi/2] for cyclic waves,
+// the rest of the waveform can be derived from that first chunk
 pub fn Wavetable(comptime num_buckets: comptime_int) [num_buckets]f32 {
     var buf: [num_buckets]f32 = undefined;
 
     @setEvalBranchQuota(num_buckets * 2 + 1);
     comptime {
-        var i = 0;
-        while (i < num_buckets) : (i += 1) {
+        inline for (0..num_buckets) |i| {
             const ind: f32 = @floatFromInt(i);
             const buckets: f32 = @floatFromInt(num_buckets);
             const phase: f32 = ind / buckets * std.math.tau;
@@ -48,7 +49,20 @@ pub fn Wavetable(comptime num_buckets: comptime_int) [num_buckets]f32 {
 }
 
 // lil sine wavetable
-pub const waveTable = Wavetable(1024);
+pub const waveTable = Wavetable(64);
+
+pub const bigWave = Wavetable(512);
+
+// TODO: theres a builtin lerp already, lol
+pub fn lerp(table: []f32, phase: f32) f32 {
+    const lowInd: usize = @intFromFloat(@floor(phase));
+    const highInd: usize = @intFromFloat(@ceil(phase));
+    const wrappedInd: usize = @mod(highInd, table.len);
+
+    const distance: f32 = @rem(phase, 1);
+
+    return (1 - distance) * table[lowInd] + distance * table[wrappedInd];
+}
 
 // TODO: assumes f32 output format
 pub const WavetableIterator = struct {
@@ -58,13 +72,20 @@ pub const WavetableIterator = struct {
     sample_rate: f32,
     buf: [4]u8 = undefined,
     // ^ Honestly, feels weird to just point to a single sample by ref?
+    withLerp: bool = false,
 
     const Self = @This();
 
     pub fn next(self: *Self) ?[]u8 {
         const len: f32 = @floatFromInt(self.wavetable.len);
         const ind: usize = @intFromFloat(@floor(@mod(self.phase, len)));
-        const result: f32 = self.wavetable[ind];
+
+        var result: f32 = undefined;
+        if (self.withLerp) {
+            result = lerp(self.wavetable, self.phase);
+        } else {
+            result = self.wavetable[ind];
+        }
         self.buf = @bitCast(result);
         self.phase += @as(f32, @floatFromInt(self.wavetable.len)) * self.pitch / self.sample_rate;
         while (self.phase >= len) {
@@ -95,6 +116,10 @@ pub const WavetableIterator = struct {
             .hasNextFn = hasNextFn,
             .nextFn = nextFn,
         };
+    }
+
+    pub fn setPitch(self: *Self, val: f32) void {
+        self.pitch = val;
     }
 };
 

@@ -102,6 +102,8 @@ pub const Context = struct {
         _ = bus_number;
 
         var player: *Player = @ptrCast(@alignCast(refPtr));
+        var source: *sources.AudioSource = @ptrCast(@alignCast(player.source));
+        var iter: *osc.WavetableIterator = @ptrCast(@alignCast(source.ptr));
 
         // TODO: this can be format-independent if we count samples over byte by byte???
         // byte-per-byte should resolve channel playback as well as format size
@@ -110,7 +112,7 @@ pub const Context = struct {
         const bytesInFrames = buffer_list.?.*.mBuffers[0].mDataByteSize;
 
         std.debug.print("mDataByteSize: {}, frames: {}\n", .{ bytesInFrames, num_frames });
-
+        std.debug.print("current pitch:\t{}\n", .{iter.pitch});
         const sample_size = 4; // TODO: pull in from player audio source eventually
         const num_samples = num_frames * 2;
 
@@ -119,7 +121,7 @@ pub const Context = struct {
         while (frame < num_samples) : (frame += 2) { // TODO: manually interleaf channels for stereo for now
             // TODO: Where should we determine source audio format? Here, on render?
 
-            const nextSample: f32 = std.mem.bytesAsValue(f32, player.source.next().?[0..sample_size]).*;
+            const nextSample: f32 = std.mem.bytesAsValue(f32, source.next().?[0..sample_size]).*;
             //std.debug.print("sample in bytes:\t{}\n", .{nextSample});
 
             buf[frame] = std.math.clamp(nextSample, -1.0, 1.0);

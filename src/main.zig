@@ -47,21 +47,29 @@ pub fn doTheThing() !void {
     defer playerContext.deinit();
 
     var source = try sources.SampleSource.init(alloc, "res/nicer_laugh.wav");
+    _ = source;
     // TODO: sample source deinit
 
     comptime var wavIterator = osc.WavetableIterator{ .wavetable = @constCast(&osc.waveTable), .pitch = 440.0, .sample_rate = 44_100 };
-
-    var player = try playerContext.createPlayer(@constCast(&source.source()));
+    comptime var lerpWave = osc.WavetableIterator{ .wavetable = @constCast(&osc.waveTable), .pitch = 440.0, .sample_rate = 44_100, .withLerp = true };
+    comptime var bigWave = osc.WavetableIterator{ .wavetable = @constCast(&osc.bigWave), .pitch = 440.0, .sample_rate = 44_100, .withLerp = true };
+    var player = try playerContext.createPlayer(@constCast(&wavIterator.source()));
 
     _ = try player.setVolume(0.5);
     player.play();
     std.log.debug("running", .{});
-    std.time.sleep(2000 * std.time.ns_per_ms);
-    player.pause();
-    player.setAudioSource(@constCast(&wavIterator.source()));
     std.time.sleep(1000 * std.time.ns_per_ms);
-    player.play();
+    player.setAudioSource(@constCast(&lerpWave.source()));
 
-    std.time.sleep(5000 * std.time.ns_per_ms);
+    var currPitch = lerpWave.pitch;
+    for (0..100) |_| {
+        currPitch += 5;
+        lerpWave.setPitch(currPitch);
+        std.time.sleep(10 * std.time.ns_per_ms);
+    }
+
+    player.setAudioSource(@constCast(&bigWave.source()));
+    std.time.sleep(1000 * std.time.ns_per_ms);
+
     std.log.debug("done", .{});
 }
