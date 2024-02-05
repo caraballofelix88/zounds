@@ -3,6 +3,8 @@ const coreaudio = @import("backends/coreaudio.zig");
 const sources = @import("sources/main.zig");
 const osc = @import("sources/osc.zig");
 
+const adder = @import("adder/main.zig");
+
 pub const SampleFormat = enum {
     f32,
 
@@ -50,25 +52,25 @@ pub fn doTheThing() !void {
     _ = source;
     // TODO: sample source deinit
 
-    comptime var wavIterator = osc.WavetableIterator{ .wavetable = @constCast(&osc.waveTable), .pitch = 440.0, .sample_rate = 44_100 };
-    comptime var lerpWave = osc.WavetableIterator{ .wavetable = @constCast(&osc.waveTable), .pitch = 440.0, .sample_rate = 44_100, .withLerp = true };
-    comptime var bigWave = osc.WavetableIterator{ .wavetable = @constCast(&osc.bigWave), .pitch = 440.0, .sample_rate = 44_100, .withLerp = true };
-    var player = try playerContext.createPlayer(@constCast(&wavIterator.source()));
+    comptime var bigWaveA = osc.WavetableIterator{ .wavetable = @constCast(&osc.bigWave), .pitch = 440.0, .sample_rate = 44_100, .withLerp = true };
+    comptime var bigWave3rd = osc.WavetableIterator{ .wavetable = @constCast(&osc.bigWave), .pitch = 523.25, .sample_rate = 44_100, .withLerp = true };
+    comptime var bigWave5th = osc.WavetableIterator{ .wavetable = @constCast(&osc.bigWave), .pitch = 659.26, .sample_rate = 44_100, .withLerp = true };
+    var a = adder.Adder{ .sourceA = bigWaveA.source(), .sourceB = bigWave3rd.source() };
+    var b = adder.Adder{ .sourceA = a.source(), .sourceB = bigWave5th.source() };
+
+    var player = try playerContext.createPlayer(@constCast(&bigWaveA.source()));
 
     _ = try player.setVolume(0.5);
     player.play();
     std.log.debug("running", .{});
     std.time.sleep(1000 * std.time.ns_per_ms);
-    player.setAudioSource(@constCast(&lerpWave.source()));
 
-    var currPitch = lerpWave.pitch;
-    for (0..100) |_| {
-        currPitch += 5;
-        lerpWave.setPitch(currPitch);
-        std.time.sleep(10 * std.time.ns_per_ms);
-    }
+    player.setAudioSource(@constCast(&a.source()));
 
-    player.setAudioSource(@constCast(&bigWave.source()));
+    std.time.sleep(1000 * std.time.ns_per_ms);
+
+    player.setAudioSource(@constCast(&b.source()));
+
     std.time.sleep(1000 * std.time.ns_per_ms);
 
     std.log.debug("done", .{});

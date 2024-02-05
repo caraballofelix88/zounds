@@ -4,37 +4,13 @@
 const std = @import("std");
 const sources = @import("main.zig");
 
-// outdated now, methinks
-// TODO: Clean up around Wavetable and WavetableIterator, i think
-pub fn SineIterator(comptime amplitude: f32, comptime pitch: f32, comptime sampleRate: f32) type {
-    return struct {
-        sampleRate: f32 = sampleRate,
-        pitch: f32 = pitch,
-        amplitude: f32 = amplitude,
-        phase: f32 = 0,
-
-        const Self = @This();
-
-        pub fn next(self: *Self) f32 {
-            const result: f32 = std.math.sin(self.phase);
-
-            self.phase += std.math.tau * self.pitch / self.sampleRate;
-
-            if (self.phase > std.math.tau) {
-                self.phase -= std.math.tau;
-            }
-
-            return result * self.amplitude;
-        }
-    };
-}
-
 // TODO: provide a sample generator function?
-// TODO: you only really need to hold onto samples for [0, pi/2] for cyclic waves,
+// TODO:(needless optimization) you only really need to hold onto samples for [0, pi/2] for cyclic waves,
 // the rest of the waveform can be derived from that first chunk
 pub fn Wavetable(comptime num_buckets: comptime_int) [num_buckets]f32 {
     var buf: [num_buckets]f32 = undefined;
 
+    // builds sine wavetable
     @setEvalBranchQuota(num_buckets * 2 + 1);
     comptime {
         inline for (0..num_buckets) |i| {
@@ -50,7 +26,7 @@ pub fn Wavetable(comptime num_buckets: comptime_int) [num_buckets]f32 {
 
 // lil sine wavetable
 pub const waveTable = Wavetable(64);
-
+// bigger sine wavetable
 pub const bigWave = Wavetable(512);
 
 // TODO: theres a builtin lerp already, lol
@@ -71,7 +47,7 @@ pub const WavetableIterator = struct {
     pitch: f32,
     sample_rate: f32,
     buf: [4]u8 = undefined,
-    // ^ Honestly, feels weird to just point to a single sample by ref?
+    // ^ Honestly, feels weird to just point to a single sample by ref? this will surely break eventually
     withLerp: bool = false,
 
     const Self = @This();
@@ -122,51 +98,3 @@ pub const WavetableIterator = struct {
         self.pitch = val;
     }
 };
-
-pub fn SquareIterator(comptime amplitude: f32, comptime pitch: f32, comptime sampleRate: f32) type {
-    return struct {
-        sampleRate: f32 = sampleRate,
-        pitch: f32 = pitch,
-        amplitude: f32 = amplitude,
-        count: f32 = 0,
-        result: f32 = 1,
-
-        const Self = @This();
-
-        pub fn next(self: *Self) f32 {
-            self.count += 1;
-            if (self.count >= sampleRate / (pitch * 2)) {
-                self.count = 0.0;
-                self.result = self.result * -1;
-            }
-
-            return self.result * self.amplitude;
-        }
-    };
-}
-
-pub fn TriangleIterator(comptime amplitude: f32, comptime pitch: f32, comptime sampleRate: f32) type {
-    return struct {
-        sampleRate: f32 = sampleRate,
-        pitch: f32 = pitch,
-        amplitude: f32 = amplitude,
-        count: f32 = 0,
-        direction: f32 = 1,
-
-        const Self = @This();
-
-        const halfStep = sampleRate / (pitch * 2);
-
-        pub fn next(self: *Self) f32 {
-            self.count += 1;
-            if (self.count >= halfStep) {
-                self.count = 0.0;
-                self.direction = self.direction * -1;
-            }
-
-            std.debug.print("Triangle wave state: signal: {}, count: {}\n", .{ self.direction, self.count });
-
-            return self.direction * (self.count / halfStep) * amplitude;
-        }
-    };
-}

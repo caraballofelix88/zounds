@@ -227,10 +227,11 @@ pub const Player = struct {
         return vol;
     }
 
+    // TODO: sounds smoother without pause/play, but there's popping
     pub fn setAudioSource(p: *Player, source: *sources.AudioSource) void {
-        p.pause();
+        // p.pause();
         p.source = source;
-        p.play();
+        // p.play();
     }
 
     fn deinit() void {} // TODO:
