@@ -52,9 +52,21 @@ pub fn doTheThing() !void {
     _ = source;
     // TODO: sample source deinit
 
-    comptime var bigWaveA = osc.WavetableIterator{ .wavetable = @constCast(&osc.bigWave), .pitch = 440.0, .sample_rate = 44_100, .withLerp = true };
-    comptime var bigWave3rd = osc.WavetableIterator{ .wavetable = @constCast(&osc.bigWave), .pitch = 523.25, .sample_rate = 44_100, .withLerp = true };
-    comptime var bigWave5th = osc.WavetableIterator{ .wavetable = @constCast(&osc.bigWave), .pitch = 659.26, .sample_rate = 44_100, .withLerp = true };
+    comptime var bigWaveA = osc.WavetableIterator{
+        .wavetable = @constCast(&osc.bigWave),
+        .pitch = 440.0,
+        .sample_rate = 44_100,
+    };
+    comptime var bigWave3rd = osc.WavetableIterator{
+        .wavetable = @constCast(&osc.bigWave),
+        .pitch = 523.25,
+        .sample_rate = 44_100,
+    };
+    comptime var bigWave5th = osc.WavetableIterator{
+        .wavetable = @constCast(&osc.bigWave),
+        .pitch = 659.26,
+        .sample_rate = 44_100,
+    };
     var a = adder.Adder{ .sourceA = bigWaveA.source(), .sourceB = bigWave3rd.source() };
     var b = adder.Adder{ .sourceA = a.source(), .sourceB = bigWave5th.source() };
 

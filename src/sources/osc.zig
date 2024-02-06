@@ -29,17 +29,6 @@ pub const waveTable = Wavetable(64);
 // bigger sine wavetable
 pub const bigWave = Wavetable(512);
 
-// TODO: theres a builtin lerp already, lol
-pub fn lerp(table: []f32, phase: f32) f32 {
-    const lowInd: usize = @intFromFloat(@floor(phase));
-    const highInd: usize = @intFromFloat(@ceil(phase));
-    const wrappedInd: usize = @mod(highInd, table.len);
-
-    const distance: f32 = @rem(phase, 1);
-
-    return (1 - distance) * table[lowInd] + distance * table[wrappedInd];
-}
-
 // TODO: assumes f32 output format
 pub const WavetableIterator = struct {
     phase: f32 = 0,
@@ -48,20 +37,17 @@ pub const WavetableIterator = struct {
     sample_rate: f32,
     buf: [4]u8 = undefined,
     // ^ Honestly, feels weird to just point to a single sample by ref? this will surely break eventually
-    withLerp: bool = false,
 
-    const Self = @This();
-
-    pub fn next(self: *Self) ?[]u8 {
+    pub fn next(self: *WavetableIterator) ?[]u8 {
         const len: f32 = @floatFromInt(self.wavetable.len);
-        const ind: usize = @intFromFloat(@floor(@mod(self.phase, len)));
 
-        var result: f32 = undefined;
-        if (self.withLerp) {
-            result = lerp(self.wavetable, self.phase);
-        } else {
-            result = self.wavetable[ind];
-        }
+        const lowInd: usize = @intFromFloat(@floor(self.phase));
+        const highInd: usize = @intFromFloat(@mod(@ceil(self.phase), len));
+
+        const distance: f32 = @rem(self.phase, 1);
+
+        const result: f32 = std.math.lerp(self.wavetable[lowInd], self.wavetable[highInd], distance);
+
         self.buf = @bitCast(result);
         self.phase += @as(f32, @floatFromInt(self.wavetable.len)) * self.pitch / self.sample_rate;
         while (self.phase >= len) {
@@ -71,22 +57,22 @@ pub const WavetableIterator = struct {
         return self.buf[0..];
     }
 
-    pub fn hasNext(self: *Self) bool {
+    pub fn hasNext(self: *WavetableIterator) bool {
         _ = self;
         return true;
     }
 
     pub fn nextFn(ptr: *anyopaque) ?[]u8 {
-        var iter: *Self = @ptrCast(@alignCast(ptr));
+        var iter: *WavetableIterator = @ptrCast(@alignCast(ptr));
         return iter.next();
     }
 
     pub fn hasNextFn(ptr: *anyopaque) bool {
-        var iter: *Self = @ptrCast(@alignCast(ptr));
+        var iter: *WavetableIterator = @ptrCast(@alignCast(ptr));
         return iter.hasNext();
     }
 
-    pub fn source(self: *Self) sources.AudioSource {
+    pub fn source(self: *WavetableIterator) sources.AudioSource {
         return .{
             .ptr = self,
             .hasNextFn = hasNextFn,
@@ -94,7 +80,7 @@ pub const WavetableIterator = struct {
         };
     }
 
-    pub fn setPitch(self: *Self, val: f32) void {
+    pub fn setPitch(self: *WavetableIterator, val: f32) void {
         self.pitch = val;
     }
 };
