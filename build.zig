@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mod = b.addModule("zounds", .{ .source_file = .{ .path = "src/main.zig" } });
+    const mod = b.addModule("zounds", .{ .root_source_file = .{ .path = "src/main.zig" } });
 
     const exe = b.addExecutable(.{
         .name = "ex",
@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.addModule("zounds", mod);
+    exe.root_module.addImport("zounds", mod);
 
     link(target, exe);
 
@@ -35,7 +35,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    main_tests.addModule("zounds", mod);
+    main_tests.root_module.addIncludePath(.{ .path = "src/main.zig" });
+
     link(target, main_tests);
 
     const run_main_tests = b.addRunArtifact(main_tests);
@@ -47,9 +48,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_main_tests.step);
 }
 
-pub fn link(target: std.zig.CrossTarget, step: *std.Build.CompileStep) void {
-    // TODO: toTarget deprecated
-    switch (target.toTarget().os.tag) {
+pub fn link(target: std.Build.ResolvedTarget, step: *std.Build.Step.Compile) void {
+    switch (target.result.os.tag) {
         .ios, .macos => {
             // Add Coreaudio, if building for MacOS
             step.linkFramework("CoreFoundation");

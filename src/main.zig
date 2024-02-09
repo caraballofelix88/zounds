@@ -48,7 +48,7 @@ pub fn doTheThing() !void {
     std.debug.print("Context:\n{}\n", .{playerContext});
     defer playerContext.deinit();
 
-    var source = try sources.SampleSource.init(alloc, "res/nicer_laugh.wav");
+    const source = try sources.SampleSource.init(alloc, "res/nicer_laugh.wav");
     _ = source;
     // TODO: sample source deinit
 

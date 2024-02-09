@@ -21,7 +21,7 @@ pub const BufferIterator = struct {
             return null;
         }
 
-        var slice = self.buffer[self.head..(self.head + self.frameSize())];
+        const slice = self.buffer[self.head..(self.head + self.frameSize())];
         self.head += self.frameSize();
 
         if (self.head >= self.buffer.len) {

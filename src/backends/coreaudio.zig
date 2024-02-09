@@ -101,9 +101,9 @@ pub const Context = struct {
         _ = timestamp;
         _ = bus_number;
 
-        var player: *Player = @ptrCast(@alignCast(refPtr));
+        const player: *Player = @ptrCast(@alignCast(refPtr));
         var source: *sources.AudioSource = @ptrCast(@alignCast(player.source));
-        var iter: *osc.WavetableIterator = @ptrCast(@alignCast(source.ptr));
+        const iter: *osc.WavetableIterator = @ptrCast(@alignCast(source.ptr));
 
         // TODO: this can be format-independent if we count samples over byte by byte???
         // byte-per-byte should resolve channel playback as well as format size
@@ -135,7 +135,7 @@ pub const Context = struct {
     pub fn refresh() void {} // TODO: not sure whats goin on in here just yet
 
     pub fn createPlayer(self: Self, source: *sources.AudioSource) !*Player {
-        var player = try self.alloc.create(Player);
+        const player = try self.alloc.create(Player);
 
         player.* = Player{ .alloc = self.alloc, .audio_unit = self.audioUnit, .is_playing = false, .ctx = &self, .source = source };
 
@@ -200,6 +200,7 @@ pub const Player = struct {
         p.is_playing = false;
     }
 
+    // TODO: there should be some kind of unified volume scale across backends/sources
     pub fn setVolume(p: *Player, vol: f32) !void {
         osStatusHandler(c.AudioUnitSetParameter(
             p.audio_unit.*,

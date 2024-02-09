@@ -26,20 +26,20 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) ![]u8 {
     var reader = buffer.reader();
 
     // read RIFF description
-    var chunk1 = try reader.readBytesNoEof(12);
+    const chunk1 = try reader.readBytesNoEof(12);
     _ = chunk1;
 
     // Reads format data subchunk
     // Assumes PCM format, where format has no extra params
-    var subChunk = try reader.readBytesNoEof(24);
+    const subChunk = try reader.readBytesNoEof(24);
     _ = subChunk;
 
-    var data = try reader.readBytesNoEof(8);
+    const data = try reader.readBytesNoEof(8);
     _ = try reader.readBytesNoEof(2); // theres some weird offset....
     std.debug.print("Heres the bytes:\t{any} : current head is {any}\n", .{ data, reader.context.start }); // "data    "
 
     // assuming f32, mono, 44_100hz (non-exhaustive list of assumptions)
-    var slice = try reader.readAllAlloc(alloc, std.math.maxInt(usize));
+    const slice = try reader.readAllAlloc(alloc, std.math.maxInt(usize));
 
     std.debug.print("How big is our buffer?\t {} bytes", .{slice.len});
 
@@ -48,6 +48,6 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) ![]u8 {
 
 test "readWav" {
     const dir = "res/evil_laugh.wav";
-    var fileBuf = try readWav(testing.allocator, dir);
+    const fileBuf = try readWav(testing.allocator, dir);
     defer testing.allocator.free(fileBuf);
 }

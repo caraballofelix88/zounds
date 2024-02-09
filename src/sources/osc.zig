@@ -7,17 +7,49 @@ const sources = @import("main.zig");
 // TODO: provide a sample generator function?
 // TODO:(needless optimization) you only really need to hold onto samples for [0, pi/2] for cyclic waves,
 // the rest of the waveform can be derived from that first chunk
+
+pub const Waveform = enum {
+    square,
+    sine,
+    wobble,
+};
+
+fn square(comptime phase: comptime_float) f32 {
+    if (phase >= std.math.pi) {
+        return -1.0;
+    }
+
+    return 1.0;
+}
+
+fn wobble(comptime phase: comptime_float, num_harmonics: comptime_int) f32 {
+    const half: f32 = 0.5;
+    var result: f32 = 0.0;
+
+    for (1..num_harmonics) |i| {
+        const h = @as(comptime_float, i);
+        result += std.math.pow(f32, half, h) * std.math.sin(phase * h);
+    }
+    return result;
+}
+
+fn sine(comptime phase: comptime_float) f32 {
+    return std.math.sin(phase);
+}
+
 pub fn Wavetable(comptime num_buckets: comptime_int) [num_buckets]f32 {
     var buf: [num_buckets]f32 = undefined;
 
+    const num_harmonics = 9;
+
     // builds sine wavetable
-    @setEvalBranchQuota(num_buckets * 2 + 1);
+    @setEvalBranchQuota(num_buckets * 2 * num_harmonics * 2 + 1); // TODO: can just be some gigantic number, int.max or something
     comptime {
-        inline for (0..num_buckets) |i| {
+        for (0..num_buckets) |i| {
             const ind: f32 = @floatFromInt(i);
             const buckets: f32 = @floatFromInt(num_buckets);
             const phase: f32 = ind / buckets * std.math.tau;
-            buf[i] = std.math.sin(phase);
+            buf[i] = wobble(phase, num_harmonics);
         }
     }
 
