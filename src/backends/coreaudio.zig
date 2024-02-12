@@ -189,7 +189,7 @@ pub const Player = struct {
             std.debug.print("uh oh, playing didn't work: {}\n", .{err});
         };
 
-        p.is_playing = false;
+        p.is_playing = true;
     }
 
     pub fn pause(p: *Player) void {

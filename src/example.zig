@@ -40,9 +40,22 @@ pub fn main() !void {
 
     zgui.getStyle().scaleAllSizes(scale_factor);
 
-    var num: i32 = 0;
+    // UI state
+    var vol: f32 = 0;
+    var pitchNote: i32 = 76;
 
-    //try zounds.doTheThing();
+    const config = zounds.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
+    var waveIterator: zounds.WavetableIterator = zounds.WavetableIterator{
+        .wavetable = @constCast(&zounds.sineWave),
+        .pitch = 440.0,
+        .sample_rate = 44_100,
+    };
+
+    const playerContext = try zounds.CoreAudioContext.init(alloc, config);
+    defer playerContext.deinit();
+
+    const player = try playerContext.createPlayer(@constCast(&waveIterator.source()));
+
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
         zglfw.pollEvents();
 
@@ -55,12 +68,35 @@ pub fn main() !void {
         zgui.setNextWindowPos(.{ .x = 20.0, .y = 20.0, .cond = .first_use_ever });
         zgui.setNextWindowSize(.{ .w = -1.0, .h = -1.0, .cond = .first_use_ever });
 
-        if (zgui.begin("My window", .{})) {
-            if (zgui.button("Press me!", .{ .w = 200.0 })) {
-                std.debug.print("Button pressed\n", .{});
+        if (zgui.begin("Player Controls", .{})) {
+            if (player.is_playing) {
+                if (zgui.button("Pause", .{ .w = 200.0 })) {
+                    std.debug.print("Pausing player\n", .{});
+                    player.pause();
+                }
+            } else {
+                if (zgui.button("Play", .{ .w = 200.0 })) {
+                    std.debug.print("Playing player\n", .{});
+                    player.play();
+                }
             }
 
-            _ = zgui.sliderInt("slide me around", .{ .v = &num, .min = 0, .max = 1000 });
+            if (zgui.sliderFloat("Volume (dB)", .{
+                .v = &vol,
+                .min = 0.0,
+                .max = 1.0,
+            })) {
+                // set Volume
+                _ = try player.setVolume(vol);
+            }
+            if (zgui.sliderInt("Pitch", .{
+                .v = &pitchNote,
+                .min = 0,
+                .max = 127,
+            })) {
+                // update pitch
+                waveIterator.setPitch(zounds.utils.pitchFromNote(pitchNote));
+            }
         }
         zgui.end();
 
