@@ -11,6 +11,22 @@ const renderers = @import("renderers/main.zig");
 
 const window_title = "zights and zounds";
 
+const AppState = struct {
+    alloc: std.mem.Allocator,
+    gctx: *zgpu.GraphicsContext,
+
+    player: *zounds.Player,
+
+    // player config
+    vol: f32,
+
+    // audio source config
+    pitchNote: i32,
+
+    // should be wrapped in some audio node kind of thing
+    waveIterator: *zounds.WavetableIterator,
+};
+
 pub fn main() !void {
     _ = try zglfw.init();
     defer zglfw.terminate();
@@ -32,7 +48,7 @@ pub fn main() !void {
     zgui.init(alloc);
     defer zgui.deinit();
 
-    _ = zgui.backend.init(
+    zgui.backend.init(
         window,
         gctx.device,
         @intFromEnum(zgpu.GraphicsContext.swapchain_format),
@@ -42,12 +58,12 @@ pub fn main() !void {
 
     zgui.getStyle().scaleAllSizes(scale_factor);
 
-    // UI state
-    var vol: f32 = 0;
-    var pitchNote: i32 = 76;
-
     const config = zounds.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
-    var waveIterator: zounds.WavetableIterator = zounds.WavetableIterator{
+
+    const waveIterator = try alloc.create(zounds.WavetableIterator);
+    defer alloc.destroy(waveIterator);
+
+    waveIterator.* = .{
         .wavetable = @constCast(&zounds.sineWave),
         .pitch = 440.0,
         .sample_rate = 44_100,
@@ -58,69 +74,88 @@ pub fn main() !void {
 
     const player = try playerContext.createPlayer(@constCast(&waveIterator.source()));
 
+    const state = try alloc.create(AppState);
+    defer alloc.destroy(state);
+
+    state.* = .{ .alloc = alloc, .gctx = gctx, .player = player, .pitchNote = 76, .vol = 0.5, .waveIterator = waveIterator };
+
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
         zglfw.pollEvents();
+        update(state);
+        draw(state);
+    }
+}
 
-        zgui.backend.newFrame(
-            gctx.swapchain_descriptor.width,
-            gctx.swapchain_descriptor.height,
-        );
+fn update(app: *AppState) void {
+    const gctx = app.gctx;
+    const player = app.player;
 
-        // Set the starting window position and size to custom values
-        zgui.setNextWindowPos(.{ .x = 20.0, .y = 20.0, .cond = .first_use_ever });
-        zgui.setNextWindowSize(.{ .w = -1.0, .h = -1.0, .cond = .first_use_ever });
+    zgui.backend.newFrame(
+        gctx.swapchain_descriptor.width,
+        gctx.swapchain_descriptor.height,
+    );
 
-        if (zgui.begin("Player Controls", .{})) {
-            if (player.is_playing) {
-                if (zgui.button("Pause", .{ .w = 200.0 })) {
-                    std.debug.print("Pausing player\n", .{});
-                    player.pause();
-                }
-            } else {
-                if (zgui.button("Play", .{ .w = 200.0 })) {
-                    std.debug.print("Playing player\n", .{});
-                    player.play();
-                }
+    // Set the starting window position and size to custom values
+    zgui.setNextWindowPos(.{ .x = 20.0, .y = 20.0, .cond = .first_use_ever });
+    zgui.setNextWindowSize(.{ .w = -1.0, .h = -1.0, .cond = .first_use_ever });
+
+    if (zgui.begin("Player Controls", .{})) {
+        if (player.is_playing) {
+            if (zgui.button("Pause", .{ .w = 200.0 })) {
+                std.debug.print("Pausing player\n", .{});
+                player.pause();
             }
-
-            if (zgui.sliderFloat("Volume (dB)", .{
-                .v = &vol,
-                .min = 0.0,
-                .max = 1.0,
-            })) {
-                // set Volume
-                _ = try player.setVolume(vol);
-            }
-            if (zgui.sliderInt("Pitch", .{
-                .v = &pitchNote,
-                .min = 0,
-                .max = 127,
-            })) {
-                // update pitch
-                waveIterator.setPitch(zounds.utils.pitchFromNote(pitchNote));
+        } else {
+            if (zgui.button("Play", .{ .w = 200.0 })) {
+                std.debug.print("Playing player\n", .{});
+                player.play();
             }
         }
-        zgui.end();
 
-        const swapchain_texv = gctx.swapchain.getCurrentTextureView();
-        defer swapchain_texv.release();
-
-        const commands = commands: {
-            const encoder = gctx.device.createCommandEncoder(null);
-            defer encoder.release();
-
-            // GUI pass
-            {
-                const pass = zgpu.beginRenderPassSimple(encoder, .load, swapchain_texv, null, null, null);
-                defer zgpu.endReleasePass(pass);
-                zgui.backend.draw(pass);
-            }
-
-            break :commands encoder.finish(null);
-        };
-        defer commands.release();
-
-        gctx.submit(&.{commands});
-        _ = gctx.present();
+        if (zgui.sliderFloat("Volume (dB)", .{
+            .v = &app.vol,
+            .min = 0.0,
+            .max = 1.0,
+        })) {
+            // set Volume
+            _ = try player.setVolume(app.vol);
+        }
+        if (zgui.sliderInt("Pitch", .{
+            .v = &app.pitchNote,
+            .min = 0,
+            .max = 127,
+        })) {
+            // update pitch
+            app.waveIterator.setPitch(zounds.utils.pitchFromNote(app.pitchNote));
+        }
     }
+    zgui.end();
+}
+
+fn draw(app: *AppState) void {
+    const gctx = app.gctx;
+
+    // const fb_width = gctx.swapchain_descriptor.width;
+    // const fb_height = gctx.swapchain_descriptor.height;
+
+    const swapchain_texv = gctx.swapchain.getCurrentTextureView();
+    defer swapchain_texv.release();
+
+    const commands = commands: {
+        const encoder = gctx.device.createCommandEncoder(null);
+        defer encoder.release();
+
+        // GUI pass
+        {
+            const pass = zgpu.beginRenderPassSimple(encoder, .load, swapchain_texv, null, null, null);
+            defer zgpu.endReleasePass(pass);
+            zgui.backend.draw(pass);
+        }
+
+        break :commands encoder.finish(null);
+    };
+    defer commands.release();
+
+    gctx.submit(&.{commands});
+    _ = gctx.present();
 }
