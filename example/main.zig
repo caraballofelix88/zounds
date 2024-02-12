@@ -7,6 +7,8 @@ const zglfw = @import("zglfw");
 
 const zounds = @import("zounds");
 
+const renderers = @import("renderers/main.zig");
+
 const window_title = "zights and zounds";
 
 pub fn main() !void {
