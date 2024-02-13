@@ -9,7 +9,7 @@ const testing = std.testing;
 const main = @import("../main.zig");
 const sources = @import("../sources/main.zig");
 const osc = @import("../sources/osc.zig");
-
+const utils = @import("../utils.zig");
 // shoutouts to my mans jamal for planting the seeds -- https://gist.github.com/jamal/8ee096ca98759f83b4942f22d365d449
 
 const DeviceState = enum {
@@ -201,13 +201,15 @@ pub const Player = struct {
     }
 
     // TODO: there should be some kind of unified volume scale across backends/sources
-    pub fn setVolume(p: *Player, vol: f32) !void {
+    pub fn setVolume(p: *Player, vol: f32) !void { // vol in Dbs
+        const amplitude = utils.decibelsToAmplitude(vol);
+
         osStatusHandler(c.AudioUnitSetParameter(
             p.audio_unit.*,
             c.kHALOutputParam_Volume,
             c.kAudioUnitScope_Global,
             0,
-            vol,
+            amplitude,
             0,
         )) catch |err| {
             std.debug.print("error setting volume: {}\n", .{err});

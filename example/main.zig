@@ -77,11 +77,11 @@ pub fn main() !void {
     defer playerContext.deinit();
 
     const player = try playerContext.createPlayer(@constCast(&wave_iterator.source()));
-
+    _ = try player.setVolume(-20.0);
     const state = try alloc.create(AppState);
     defer alloc.destroy(state);
 
-    state.* = .{ .alloc = alloc, .gctx = gctx, .player = player, .pitchNote = 76, .vol = 0.5, .wave_iterator = wave_iterator };
+    state.* = .{ .alloc = alloc, .gctx = gctx, .player = player, .pitchNote = 76, .vol = -20.0, .wave_iterator = wave_iterator };
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
         zglfw.pollEvents();
@@ -116,11 +116,7 @@ fn update(app: *AppState) void {
             }
         }
 
-        if (zgui.sliderFloat("Volume (dB)", .{
-            .v = &app.vol,
-            .min = 0.0,
-            .max = 1.0,
-        })) {
+        if (zgui.sliderFloat("Volume (dB)", .{ .v = &app.vol, .min = -40.0, .max = 0.0 })) {
             // set Volume
             _ = try player.setVolume(app.vol);
         }

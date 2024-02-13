@@ -65,7 +65,7 @@ pub fn Wavetable(comptime num_buckets: comptime_int, comptime waveform: Waveform
     return buf;
 }
 
-pub const bigWave = Wavetable(512, .square);
+pub const bigWave = Wavetable(512, .wobble);
 
 // TODO: assumes f32 output format
 pub const WavetableIterator = struct {
