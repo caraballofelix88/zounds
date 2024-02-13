@@ -24,8 +24,12 @@ const AppState = struct {
     pitchNote: i32,
 
     // should be wrapped in some audio node kind of thing
-    waveIterator: *zounds.WavetableIterator,
+    wave_iterator: *zounds.WavetableIterator,
 };
+
+const AudioNode = struct {};
+
+const AudioGraph = struct { alloc: std.mem.Allocator, nodes: AudioNode };
 
 pub fn main() !void {
     _ = try zglfw.init();
@@ -60,10 +64,10 @@ pub fn main() !void {
 
     const config = zounds.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
 
-    const waveIterator = try alloc.create(zounds.WavetableIterator);
-    defer alloc.destroy(waveIterator);
+    const wave_iterator = try alloc.create(zounds.WavetableIterator);
+    defer alloc.destroy(wave_iterator);
 
-    waveIterator.* = .{
+    wave_iterator.* = .{
         .wavetable = @constCast(&zounds.sineWave),
         .pitch = 440.0,
         .sample_rate = 44_100,
@@ -72,12 +76,12 @@ pub fn main() !void {
     const playerContext = try zounds.CoreAudioContext.init(alloc, config);
     defer playerContext.deinit();
 
-    const player = try playerContext.createPlayer(@constCast(&waveIterator.source()));
+    const player = try playerContext.createPlayer(@constCast(&wave_iterator.source()));
 
     const state = try alloc.create(AppState);
     defer alloc.destroy(state);
 
-    state.* = .{ .alloc = alloc, .gctx = gctx, .player = player, .pitchNote = 76, .vol = 0.5, .waveIterator = waveIterator };
+    state.* = .{ .alloc = alloc, .gctx = gctx, .player = player, .pitchNote = 76, .vol = 0.5, .wave_iterator = wave_iterator };
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
         zglfw.pollEvents();
@@ -126,10 +130,15 @@ fn update(app: *AppState) void {
             .max = 127,
         })) {
             // update pitch
-            app.waveIterator.setPitch(zounds.utils.pitchFromNote(app.pitchNote));
+            app.wave_iterator.setPitch(zounds.utils.pitchFromNote(app.pitchNote));
         }
+        zgui.end();
     }
-    zgui.end();
+
+    if (zgui.begin("Plot", .{})) {
+        try renderers.renderPlot();
+        zgui.end();
+    }
 }
 
 fn draw(app: *AppState) void {

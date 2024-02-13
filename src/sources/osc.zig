@@ -18,7 +18,6 @@ fn square(comptime phase: comptime_float) f32 {
     if (phase >= std.math.pi) {
         return -1.0;
     }
-
     return 1.0;
 }
 
@@ -37,29 +36,36 @@ fn sine(comptime phase: comptime_float) f32 {
     return std.math.sin(phase);
 }
 
-pub fn Wavetable(comptime num_buckets: comptime_int) [num_buckets]f32 {
+pub fn Wavetable(comptime num_buckets: comptime_int, comptime waveform: Waveform) [num_buckets]f32 {
     var buf: [num_buckets]f32 = undefined;
 
     const num_harmonics = 9;
 
-    // builds sine wavetable
-    @setEvalBranchQuota(num_buckets * 2 * num_harmonics * 2 + 1); // TODO: can just be some gigantic number, int.max or something
+    @setEvalBranchQuota(num_buckets * 2 * num_harmonics * 2 + 1 * 3); // TODO: can just be some gigantic number, int.max or something
     comptime {
         for (0..num_buckets) |i| {
             const ind: f32 = @floatFromInt(i);
             const buckets: f32 = @floatFromInt(num_buckets);
             const phase: f32 = ind / buckets * std.math.tau;
-            buf[i] = wobble(phase, num_harmonics);
+
+            switch (waveform) {
+                .sine => {
+                    buf[i] = sine(phase);
+                },
+                .wobble => {
+                    buf[i] = wobble(phase, num_harmonics);
+                },
+                .square => {
+                    buf[i] = square(phase);
+                },
+            }
         }
     }
 
     return buf;
 }
 
-// lil sine wavetable
-pub const waveTable = Wavetable(64);
-// bigger sine wavetable
-pub const bigWave = Wavetable(512);
+pub const bigWave = Wavetable(512, .square);
 
 // TODO: assumes f32 output format
 pub const WavetableIterator = struct {
