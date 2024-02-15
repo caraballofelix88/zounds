@@ -103,16 +103,11 @@ pub const Context = struct {
 
         const player: *Player = @ptrCast(@alignCast(refPtr));
         var source: *sources.AudioSource = @ptrCast(@alignCast(player.source));
-        const iter: *osc.WavetableIterator = @ptrCast(@alignCast(source.ptr));
 
         // TODO: this can be format-independent if we count samples over byte by byte???
         // byte-per-byte should resolve channel playback as well as format size
         var buf: [*]f32 = @ptrCast(@alignCast(buffer_list.?.*.mBuffers[0].mData));
 
-        const bytesInFrames = buffer_list.?.*.mBuffers[0].mDataByteSize;
-
-        std.debug.print("mDataByteSize: {}, frames: {}\n", .{ bytesInFrames, num_frames });
-        std.debug.print("current pitch:\t{}\n", .{iter.pitch});
         const sample_size = 4; // TODO: pull in from player audio source eventually
         const num_samples = num_frames * 2;
 

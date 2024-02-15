@@ -74,3 +74,56 @@ pub const SampleSource = struct {
         return .{ .ptr = self, .nextFn = nextFn, .hasNextFn = hasNextFn };
     }
 };
+
+pub const BufferSource = struct {
+    alloc: std.mem.Allocator,
+    in_source: AudioSource,
+    buf: *std.RingBuffer,
+    size: usize,
+
+    pub fn init(alloc: std.mem.Allocator, in_source: AudioSource) !BufferSource {
+        // hardcoded size for now
+        const size: usize = @as(usize, main.SampleFormat.f32.size()) * 44_100 * 2; // 2 seconds of samples
+
+        const buf = try alloc.create(std.RingBuffer);
+        buf.* = try std.RingBuffer.init(alloc, size);
+
+        // const fifo = try std.fifo.LinearFifo(f32, size).init();
+
+        return .{ .alloc = alloc, .in_source = in_source, .buf = buf, .size = size };
+    }
+
+    pub fn deinit(s: *BufferSource) void {
+        s.buf.deinit(s.alloc);
+
+        s.alloc.destroy(s.buf);
+    }
+
+    pub fn nextFn(ptr: *anyopaque) ?[]u8 {
+        const s: *BufferSource = @ptrCast(@alignCast(ptr));
+
+        if (s.in_source.next()) |sample| {
+            s.buf.writeSliceAssumeCapacity(sample);
+
+            // move read index 4 bytes up when full
+            if (s.buf.isFull()) {
+                _ = s.buf.read();
+                _ = s.buf.read();
+                _ = s.buf.read();
+                _ = s.buf.read();
+            }
+
+            return sample;
+        }
+        return null;
+    }
+
+    pub fn hasNextFn(ptr: *anyopaque) bool {
+        const s: *BufferSource = @ptrCast(@alignCast(ptr));
+        return s.in_source.hasNext();
+    }
+
+    pub fn source(self: *BufferSource) AudioSource {
+        return .{ .ptr = self, .nextFn = nextFn, .hasNextFn = hasNextFn };
+    }
+};

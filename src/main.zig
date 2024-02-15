@@ -1,6 +1,6 @@
 const std = @import("std");
 const coreaudio = @import("backends/coreaudio.zig");
-const sources = @import("sources/main.zig");
+pub const sources = @import("sources/main.zig");
 const osc = @import("sources/osc.zig");
 
 const adder = @import("adder/main.zig");

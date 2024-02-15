@@ -16,6 +16,7 @@ const AppState = struct {
     gctx: *zgpu.GraphicsContext,
 
     player: *zounds.Player,
+    sound_buffer: *std.RingBuffer,
 
     // player config
     vol: f32,
@@ -25,10 +26,11 @@ const AppState = struct {
 
     // should be wrapped in some audio node kind of thing
     wave_iterator: *zounds.WavetableIterator,
+    rand: std.rand.Random,
 };
 
 const AudioNode = struct {};
-
+// TODO: implement node structure with sources
 const AudioGraph = struct { alloc: std.mem.Allocator, nodes: AudioNode };
 
 pub fn main() !void {
@@ -38,7 +40,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    const window = try zglfw.Window.create(400, 400, window_title, null);
+    const window = try zglfw.Window.create(1400, 700, window_title, null);
     defer window.destroy();
     window.setSizeLimits(1400, 1400, -1, -1);
 
@@ -73,24 +75,29 @@ pub fn main() !void {
         .sample_rate = 44_100,
     };
 
+    var bufferSource = try zounds.sources.BufferSource.init(alloc, wave_iterator.source());
+    defer bufferSource.deinit();
+
     const playerContext = try zounds.CoreAudioContext.init(alloc, config);
     defer playerContext.deinit();
 
-    const player = try playerContext.createPlayer(@constCast(&wave_iterator.source()));
+    const player = try playerContext.createPlayer(@constCast(&bufferSource.source()));
     _ = try player.setVolume(-20.0);
     const state = try alloc.create(AppState);
     defer alloc.destroy(state);
 
-    state.* = .{ .alloc = alloc, .gctx = gctx, .player = player, .pitchNote = 76, .vol = -20.0, .wave_iterator = wave_iterator };
+    var rand = std.rand.DefaultPrng.init(0);
+
+    state.* = .{ .alloc = alloc, .gctx = gctx, .player = player, .pitchNote = 76, .vol = -20.0, .wave_iterator = wave_iterator, .sound_buffer = bufferSource.buf, .rand = rand.random() };
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
         zglfw.pollEvents();
-        update(state);
+        try update(state);
         draw(state);
     }
 }
 
-fn update(app: *AppState) void {
+fn update(app: *AppState) !void {
     const gctx = app.gctx;
     const player = app.player;
 
@@ -100,8 +107,8 @@ fn update(app: *AppState) void {
     );
 
     // Set the starting window position and size to custom values
-    zgui.setNextWindowPos(.{ .x = 20.0, .y = 20.0, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = -1.0, .h = -1.0, .cond = .first_use_ever });
+    // zgui.setNextWindowPos(.{ .x = 20.0, .y = 20.0, .cond = .first_use_ever });
+    // zgui.setNextWindowSize(.{ .w = -1.0, .h = -1.0, .cond = .first_use_ever });
 
     if (zgui.begin("Player Controls", .{})) {
         if (player.is_playing) {
@@ -132,7 +139,7 @@ fn update(app: *AppState) void {
     }
 
     if (zgui.begin("Plot", .{})) {
-        try renderers.renderPlot();
+        try renderers.renderPlot(app.sound_buffer);
         zgui.end();
     }
 }
