@@ -7,6 +7,7 @@ pub fn renderNode(node: main.AudioNode) void {
     _ = node;
 }
 
+// TODO: (improvement) consider https://en.wikipedia.org/wiki/Ramer%E2%80%93Douglas%E2%80%93Peucker_algorithm
 pub fn renderPlot(buf: *std.RingBuffer) !void {
     zgui.plot.init();
 
@@ -18,7 +19,7 @@ pub fn renderPlot(buf: *std.RingBuffer) !void {
 
     if (zgui.plot.beginPlot("Line Plot", .{ .h = -1.0 })) {
         zgui.plot.setupAxis(.x1, .{ .label = "xaxis" });
-        zgui.plot.setupAxisLimits(.x1, .{ .min = 0, .max = @floatFromInt(size / 4) });
+        zgui.plot.setupAxisLimits(.x1, .{ .min = 0, .max = @floatFromInt(size / 4), .cond = .once });
         zgui.plot.setupAxisLimits(.y1, .{ .min = -1.0, .max = 1.0 });
         zgui.plot.setupLegend(.{ .south = true, .west = true }, .{});
         zgui.plot.setupFinish();

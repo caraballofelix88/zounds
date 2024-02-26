@@ -1,17 +1,15 @@
-//TODO: try building iterators to send to audio render func?
-// is there a way to make them stateful?
-
 const std = @import("std");
 const sources = @import("main.zig");
 
 // TODO: provide a sample generator function?
-// TODO:(needless optimization) you only really need to hold onto samples for [0, pi/2] for cyclic waves,
+// TODO:(needless optimization) you only really need to hold onto samples for [0, pi/2] for cyclic waveforms,
 // the rest of the waveform can be derived from that first chunk
 
 pub const Waveform = enum {
     square,
     sine,
     wobble,
+    noise,
 };
 
 fn square(comptime phase: comptime_float) f32 {
@@ -36,12 +34,18 @@ fn sine(comptime phase: comptime_float) f32 {
     return std.math.sin(phase);
 }
 
+fn noise(rand: std.rand.Random) f32 {
+    return rand.float(f32) * 2.0 - 1.0;
+}
+
 pub fn Wavetable(comptime num_buckets: comptime_int, comptime waveform: Waveform) [num_buckets]f32 {
     var buf: [num_buckets]f32 = undefined;
 
     const num_harmonics = 9;
+    var prng = std.rand.DefaultPrng.init(0);
 
-    @setEvalBranchQuota(num_buckets * 2 * num_harmonics * 2 + 1 * 3); // TODO: can just be some gigantic number, int.max or something
+    // is maxing out eval branches like this clumsy?
+    @setEvalBranchQuota(std.math.maxInt(u32));
     comptime {
         for (0..num_buckets) |i| {
             const ind: f32 = @floatFromInt(i);
@@ -58,6 +62,9 @@ pub fn Wavetable(comptime num_buckets: comptime_int, comptime waveform: Waveform
                 .square => {
                     buf[i] = square(phase);
                 },
+                .noise => {
+                    buf[i] = noise(prng.random());
+                },
             }
         }
     }
@@ -66,6 +73,7 @@ pub fn Wavetable(comptime num_buckets: comptime_int, comptime waveform: Waveform
 }
 
 pub const bigWave = Wavetable(512, .wobble);
+pub const hiss = Wavetable(512, .noise);
 
 // TODO: assumes f32 output format
 pub const WavetableIterator = struct {

@@ -26,12 +26,14 @@ const AppState = struct {
 
     // should be wrapped in some audio node kind of thing
     wave_iterator: *zounds.WavetableIterator,
+    sequence_source: *zounds.sources.SequenceSource,
     rand: std.rand.Random,
-};
 
-const AudioNode = struct {};
-// TODO: implement node structure with sources
-const AudioGraph = struct { alloc: std.mem.Allocator, nodes: AudioNode };
+    window: *zglfw.Window,
+    bpm: i32 = 120,
+    // was space pressed last frame?
+    space_pressed: bool = false,
+};
 
 pub fn main() !void {
     _ = try zglfw.init();
@@ -75,7 +77,25 @@ pub fn main() !void {
         .sample_rate = 44_100,
     };
 
-    var bufferSource = try zounds.sources.BufferSource.init(alloc, wave_iterator.source());
+    const tick_iterator = try alloc.create(zounds.WavetableIterator);
+    defer alloc.destroy(tick_iterator);
+
+    tick_iterator.* = .{
+        .wavetable = @constCast(&zounds.hiss),
+        .pitch = 50.0,
+        .sample_rate = 44_100,
+    };
+
+    var sequence = try alloc.create(zounds.sources.SequenceSource);
+    sequence.* = zounds.sources.SequenceSource.init(wave_iterator, 120);
+
+    //var tick = try alloc.create(zounds.sources.TickSource);
+    // tick.* = zounds.sources.TickSource.init(120);
+
+    //var mux = zounds.sources.MuxSource.init(tick_iterator.source(), tick.source());
+    //var add = zounds.sources.AddSource.init(sequence.source(), mux.source());
+
+    var bufferSource = try zounds.sources.BufferSource.init(alloc, sequence.source());
     defer bufferSource.deinit();
 
     const playerContext = try zounds.CoreAudioContext.init(alloc, config);
@@ -88,7 +108,18 @@ pub fn main() !void {
 
     var rand = std.rand.DefaultPrng.init(0);
 
-    state.* = .{ .alloc = alloc, .gctx = gctx, .player = player, .pitchNote = 76, .vol = -20.0, .wave_iterator = wave_iterator, .sound_buffer = bufferSource.buf, .rand = rand.random() };
+    state.* = .{
+        .alloc = alloc,
+        .gctx = gctx,
+        .player = player,
+        .pitchNote = 76,
+        .vol = -20.0,
+        .wave_iterator = wave_iterator,
+        .sound_buffer = bufferSource.buf,
+        .rand = rand.random(),
+        .window = window,
+        .sequence_source = sequence,
+    };
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
         zglfw.pollEvents();
@@ -97,9 +128,44 @@ pub fn main() !void {
     }
 }
 
+fn keyCallback(
+    window: *zglfw.Window,
+    key: zglfw.Key,
+    scancode: i32,
+    action: zglfw.Action,
+    mods: zglfw.Mods,
+) callconv(.C) void {
+    _ = window;
+    _ = mods;
+    _ = scancode;
+    if (action == .press) {
+        std.debug.print("key pressed: {}\n", .{key});
+    }
+}
+
 fn update(app: *AppState) !void {
     const gctx = app.gctx;
     const player = app.player;
+
+    const window = app.window;
+
+    if (window.getKey(.space) == .press) {
+        // button positive edge
+        if (app.space_pressed == false) {
+            if (player.is_playing) {
+                player.pause();
+            } else {
+                player.play();
+            }
+        }
+        app.space_pressed = true;
+    } else {
+        app.space_pressed = false;
+    }
+
+    const keys = .{ .a, .s, .d, .f };
+    _ = keys;
+    _ = window.setKeyCallback(keyCallback);
 
     zgui.backend.newFrame(
         gctx.swapchain_descriptor.width,
@@ -123,7 +189,7 @@ fn update(app: *AppState) !void {
             }
         }
 
-        if (zgui.sliderFloat("Volume (dB)", .{ .v = &app.vol, .min = -40.0, .max = 0.0 })) {
+        if (zgui.sliderFloat("Volume (dB)", .{ .v = &app.vol, .min = -30.0, .max = -10.0 })) {
             // set Volume
             _ = try player.setVolume(app.vol);
         }
@@ -135,6 +201,17 @@ fn update(app: *AppState) !void {
             // update pitch
             app.wave_iterator.setPitch(zounds.utils.pitchFromNote(app.pitchNote));
         }
+
+        if (zgui.sliderInt("Tick BPM", .{ .v = &app.bpm, .min = 20, .max = 300 })) {
+            app.sequence_source.bpm = @intCast(app.bpm);
+        }
+
+        if (zgui.button("Reset sequencer counter", .{})) {
+            std.debug.print("reset sequence\n", .{});
+            app.sequence_source.note_index = 0;
+            app.sequence_source.ticks = 0;
+        }
+
         zgui.end();
     }
 

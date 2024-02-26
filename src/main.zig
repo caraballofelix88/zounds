@@ -39,6 +39,7 @@ pub const Context = struct {
 };
 
 pub const sineWave = osc.bigWave;
+pub const hiss = osc.hiss;
 pub const WavetableIterator = osc.WavetableIterator;
 
 pub const ChannelPosition = enum { left, right };
