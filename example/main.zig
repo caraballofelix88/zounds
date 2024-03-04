@@ -11,6 +11,13 @@ const renderers = @import("renderers/main.zig");
 
 const window_title = "zights and zounds";
 
+pub const NodeCtx = struct {
+    x: f32,
+    y: f32,
+    node: zounds.sources.AudioNode,
+    label: [:0]const u8,
+};
+
 const AppState = struct {
     alloc: std.mem.Allocator,
     gctx: *zgpu.GraphicsContext,
@@ -33,7 +40,14 @@ const AppState = struct {
     bpm: i32 = 120,
     // was space pressed last frame?
     space_pressed: bool = false,
+
+    nodes: *std.ArrayList(NodeCtx),
 };
+
+export fn windowRescaleFn(window: *zglfw.Window, xscale: f32, yscale: f32) callconv(.C) void {
+    _ = window;
+    zgui.getStyle().scaleAllSizes(@min(xscale, yscale) * 2);
+}
 
 pub fn main() !void {
     _ = try zglfw.init();
@@ -44,15 +58,13 @@ pub fn main() !void {
 
     const window = try zglfw.Window.create(1400, 700, window_title, null);
     defer window.destroy();
-    window.setSizeLimits(1400, 1400, -1, -1);
+    window.setSizeLimits(500, 500, 2000, 2000);
 
     const gctx = try zgpu.GraphicsContext.create(alloc, window, .{});
     defer gctx.destroy(alloc);
 
-    const scale_factor = scale_factor: {
-        const scale = window.getContentScale();
-        break :scale_factor @max(scale[0], scale[1]);
-    };
+    _ = window.setContentScaleCallback(windowRescaleFn);
+
     zgui.init(alloc);
     defer zgui.deinit();
 
@@ -63,8 +75,6 @@ pub fn main() !void {
         @intFromEnum(wgpu.TextureFormat.undef),
     );
     defer zgui.backend.deinit();
-
-    zgui.getStyle().scaleAllSizes(scale_factor);
 
     const config = zounds.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
 
@@ -89,12 +99,6 @@ pub fn main() !void {
     var sequence = try alloc.create(zounds.sources.SequenceSource);
     sequence.* = zounds.sources.SequenceSource.init(wave_iterator, 120);
 
-    //var tick = try alloc.create(zounds.sources.TickSource);
-    // tick.* = zounds.sources.TickSource.init(120);
-
-    //var mux = zounds.sources.MuxSource.init(tick_iterator.source(), tick.source());
-    //var add = zounds.sources.AddSource.init(sequence.source(), mux.source());
-
     var bufferSource = try zounds.sources.BufferSource.init(alloc, sequence.source());
     defer bufferSource.deinit();
 
@@ -105,6 +109,29 @@ pub fn main() !void {
     _ = try player.setVolume(-20.0);
     const state = try alloc.create(AppState);
     defer alloc.destroy(state);
+
+    const node_a_name: [:0]const u8 = try alloc.dupeZ(u8, "Node A");
+    const node_b_name: [:0]const u8 = try alloc.dupeZ(u8, "Node B");
+    const nodeA = NodeCtx{
+        .x = 100,
+        .y = 100,
+        .node = zounds.sources.AudioNode.init(node_a_name),
+        .label = node_a_name,
+    };
+    const nodeB = NodeCtx{
+        .x = 200,
+        .y = 200,
+        .node = zounds.sources.AudioNode.init(node_b_name),
+        .label = node_b_name,
+    };
+
+    var nodes = try alloc.create(std.ArrayList(NodeCtx));
+    nodes.* = std.ArrayList(NodeCtx).init(alloc);
+    defer alloc.destroy(nodes);
+    defer nodes.deinit();
+
+    _ = try nodes.append(nodeA);
+    _ = try nodes.append(nodeB);
 
     var rand = std.rand.DefaultPrng.init(0);
 
@@ -119,6 +146,7 @@ pub fn main() !void {
         .rand = rand.random(),
         .window = window,
         .sequence_source = sequence,
+        .nodes = nodes,
     };
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
@@ -172,10 +200,6 @@ fn update(app: *AppState) !void {
         gctx.swapchain_descriptor.height,
     );
 
-    // Set the starting window position and size to custom values
-    // zgui.setNextWindowPos(.{ .x = 20.0, .y = 20.0, .cond = .first_use_ever });
-    // zgui.setNextWindowSize(.{ .w = -1.0, .h = -1.0, .cond = .first_use_ever });
-
     if (zgui.begin("Player Controls", .{})) {
         if (player.is_playing) {
             if (zgui.button("Pause", .{ .w = 200.0 })) {
@@ -214,6 +238,8 @@ fn update(app: *AppState) !void {
 
         zgui.end();
     }
+
+    // try renderers.renderNodeGraph(app.nodes.items);
 
     if (zgui.begin("Plot", .{})) {
         try renderers.renderPlot(app.sound_buffer);

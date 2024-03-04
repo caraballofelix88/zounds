@@ -261,10 +261,10 @@ const megalovania = .{ // 60 = C4, i think?
 };
 
 const simple_notes = .{
-    clock.Note{ .pitch = 60, .duration = .whole },
-    clock.Note{ .pitch = 62, .duration = .whole },
-    clock.Note{ .pitch = 63, .duration = .whole },
-    clock.Note{ .pitch = 64, .duration = .whole },
+    clock.Note{ .pitch = 60, .duration = .quarter },
+    clock.Note{ .pitch = 62, .duration = .quarter },
+    clock.Note{ .pitch = 64, .duration = .quarter },
+    clock.Note{ .pitch = 65, .duration = .quarter },
 };
 
 // represents a single
@@ -273,7 +273,7 @@ pub const SequenceSource = struct {
     iterator: *osc.WavetableIterator,
     bpm: u32,
     ticks: u64 = 0,
-    notes: []const clock.Note = &megalovania,
+    notes: []const clock.Note = &simple_notes,
     note_index: usize = 0,
 
     pub fn init(iterator: *osc.WavetableIterator, bpm: u32) SequenceSource {
@@ -319,6 +319,15 @@ pub const SequenceSource = struct {
     }
 };
 
-const AudioNode = struct { source: AudioSource, graph: ?*AudioGraph };
+pub const AudioNode = struct {
+    in: ?*AudioNode,
+    out: ?*AudioNode,
+    graph: ?*AudioGraph,
+    name: []const u8,
+
+    pub fn init(name: []const u8) AudioNode {
+        return AudioNode{ .in = null, .out = null, .graph = null, .name = name };
+    }
+};
 // TODO: implement node structure with sources
 const AudioGraph = struct { alloc: std.mem.Allocator, nodes: AudioNode, sample_rate: u32, sample_ticks: u64 };
