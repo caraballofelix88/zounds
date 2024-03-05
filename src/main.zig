@@ -5,12 +5,15 @@ const osc = @import("sources/osc.zig");
 
 const adder = @import("adder/main.zig");
 
+pub const wav = @import("readers/wav.zig");
+
 pub const utils = @import("utils.zig");
 
 pub const Player = coreaudio.Player;
 
 pub const SampleFormat = enum {
     f32,
+    i16,
 
     pub fn size(fmt: SampleFormat) u8 {
         return bitSize(fmt) / 8;
@@ -19,12 +22,14 @@ pub const SampleFormat = enum {
     pub fn bitSize(fmt: SampleFormat) u8 {
         return switch (fmt) {
             .f32 => 32,
+            .i16 => 16,
         };
     }
 
     pub fn fmtType(comptime fmt: SampleFormat) type {
         return switch (fmt) {
             .f32 => f32,
+            .i16 => i16,
         };
     }
 };

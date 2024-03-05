@@ -103,6 +103,7 @@ pub const Context = struct {
 
         const player: *Player = @ptrCast(@alignCast(refPtr));
         var source: *sources.AudioSource = @ptrCast(@alignCast(player.source));
+        // var source = player.source;
 
         // TODO: this can be format-independent if we count samples over byte by byte???
         // byte-per-byte should resolve channel playback as well as format size
@@ -227,9 +228,9 @@ pub const Player = struct {
 
     // TODO: sounds smoother without pause/play, but there's popping
     pub fn setAudioSource(p: *Player, source: *sources.AudioSource) void {
-        // p.pause();
+        p.pause();
         p.source = source;
-        // p.play();
+        p.play();
     }
 
     fn deinit() void {} // TODO:

@@ -1,6 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 
+const main = @import("../main.zig");
+
 // reference: http://soundfile.sapp.org/doc/WaveFormat/
 
 // bytes 0 - 12: RIFF description
@@ -18,7 +20,45 @@ const testing = std.testing;
 // - channel count + ids
 // - etc.
 
-pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) ![]u8 {
+pub const WavFormatData = struct {
+    file_size: u32,
+    format_length: u32,
+    format_type: u16,
+    num_channels: u16,
+    sample_rate: u32,
+    byte_rate: u32,
+    block_align: u16,
+    bits_per_sample: u16,
+};
+
+pub const FileBuffer = struct {
+    format_data: WavFormatData,
+    buf: []u8,
+};
+
+pub const Field = struct { name: []u8, size_bytes: u8, field_type: type, is_big_endian: bool = false, optional: bool = false };
+
+pub fn FileSpec(comptime T: type) type {
+    return struct { fields: []Field, spec_type: T };
+}
+
+// const wav_spec = FileSpec{
+//     .spec_type = WavFormatData,
+//     .fields = .{
+//         .{ .name = "RAFF", .size_bytes = 4, .field_type = u8, .optional = true },
+//         .{ .name = "file_size", .size_bytes = 4, .field_type = u8, .optional = true },
+//     },
+// };
+//
+// pub fn parseData(reader: std.io.Reader, spec: FileSpec) WavFormatData {
+//     _ = reader;
+//
+//     var out = spec.spec_type{};
+//
+//     inline for (spec.fields) |spec_field| {}
+// }
+
+pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !FileBuffer {
     var file = try std.fs.cwd().openFile(dir, .{});
     defer file.close();
 
@@ -26,28 +66,77 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) ![]u8 {
     var reader = buffer.reader();
 
     // read RIFF description
-    const chunk1 = try reader.readBytesNoEof(12);
-    _ = chunk1;
+    const riff_bytes = try reader.readBytesNoEof(4);
+    std.debug.print("\t{s}RAFF\n", .{riff_bytes});
 
-    // Reads format data subchunk
-    // Assumes PCM format, where format has no extra params
-    const subChunk = try reader.readBytesNoEof(24);
-    _ = subChunk;
+    const file_size_raw = try reader.readBytesNoEof(4);
+    const file_size = std.mem.bytesToValue(u32, &file_size_raw);
+    std.debug.print("File size (B):\t{}\n", .{file_size});
 
-    const data = try reader.readBytesNoEof(8);
-    _ = try reader.readBytesNoEof(2); // theres some weird offset....
-    std.debug.print("Heres the bytes:\t{any} : current head is {any}\n", .{ data, reader.context.start }); // "data    "
+    const wavefmt = try reader.readBytesNoEof(4 + 4); // 'WAVE' + 'fmt '
+    std.debug.print("{s}\n", .{wavefmt});
 
-    // assuming f32, mono, 44_100hz (non-exhaustive list of assumptions)
+    const format_length_raw = try reader.readBytesNoEof(4);
+    const format_length = std.mem.bytesToValue(u32, &format_length_raw);
+    std.debug.print("Format data size:\t{}\n", .{format_length});
+
+    const format_type_raw = try reader.readBytesNoEof(2);
+    const format_type = std.mem.bytesToValue(u16, &format_type_raw);
+    std.debug.print("Format Type (1 is PCM):\t{}\n", .{format_type});
+
+    const num_channels_raw = try reader.readBytesNoEof(2);
+    const num_channels = std.mem.bytesToValue(u16, &num_channels_raw);
+    std.debug.print("Number of channels:\t{}\n", .{num_channels});
+
+    const sample_rate_raw = try reader.readBytesNoEof(4);
+    const sample_rate = std.mem.bytesToValue(u32, &sample_rate_raw);
+    std.debug.print("Sample rate:\t{}\n", .{sample_rate});
+
+    // (Sample Rate * BitsPerSample * Channels) / 8
+    // https://docs.fileformat.com/audio/wav/
+    const byte_rate_raw = try reader.readBytesNoEof(4);
+    const byte_rate = std.mem.bytesToValue(u32, &byte_rate_raw);
+    std.debug.print("Byte rate:\t{}\n", .{byte_rate});
+
+    const block_align_raw = try reader.readBytesNoEof(2);
+    const block_align = std.mem.bytesToValue(u16, &block_align_raw);
+    std.debug.print("Block align:\t{}\n", .{block_align});
+
+    // (BitsPerSample * Channels) / 8.1 - 8 bit mono2 - 8 bit stereo/16 bit mono4 - 16 bit stereo
+    // https://docs.fileformat.com/audio/wav/
+    const bits_per_sample_raw = try reader.readBytesNoEof(2);
+    const bits_per_sample = std.mem.bytesToValue(u16, &bits_per_sample_raw);
+    std.debug.print("bits per sample:\t{}\n", .{bits_per_sample});
+
+    const data_header = try reader.readBytesNoEof(4);
+    _ = data_header;
+    const data_section_size = try reader.readBytesNoEof(4);
+    std.debug.print("Heres the bytes:\t{any} : current head is {any}\n", .{ data_section_size, reader.context.start }); // "data    "
+
     const slice = try reader.readAllAlloc(alloc, std.math.maxInt(usize));
 
-    std.debug.print("How big is our buffer?\t {} bytes", .{slice.len});
+    std.debug.print("How big is our buffer?\t {} bytes\n", .{slice.len});
 
-    return slice; // return alloc-owned slice;
+    return .{
+        .format_data = .{
+            .file_size = file_size,
+            .format_length = format_length,
+            .format_type = format_type,
+            .num_channels = num_channels,
+            .sample_rate = sample_rate,
+            .byte_rate = byte_rate,
+            .block_align = block_align,
+            .bits_per_sample = bits_per_sample,
+        },
+        .buf = slice,
+    };
 }
 
 test "readWav" {
     const dir = "res/evil_laugh.wav";
-    const fileBuf = try readWav(testing.allocator, dir);
-    defer testing.allocator.free(fileBuf);
+    const file = try readWav(testing.allocator, dir);
+
+    // TODO: assert correct specs
+
+    defer testing.allocator.free(file.buf);
 }

@@ -51,8 +51,9 @@ pub const SampleSource = struct {
     iterator: buffered.BufferIterator,
 
     pub fn init(alloc: std.mem.Allocator, path: []const u8) !SampleSource {
-        const buf = try wav.readWav(alloc, path);
-        const iterator = buffered.BufferIterator.init(buf, main.SampleFormat.f32);
+        const file = try wav.readWav(alloc, path);
+
+        const iterator = buffered.BufferIterator.init(file.buf, main.SampleFormat.f32);
 
         return .{ .alloc = alloc, .iterator = iterator };
     }
@@ -95,7 +96,6 @@ pub const BufferSource = struct {
 
     pub fn deinit(s: *BufferSource) void {
         s.buf.deinit(s.alloc);
-
         s.alloc.destroy(s.buf);
     }
 

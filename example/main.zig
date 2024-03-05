@@ -18,11 +18,19 @@ pub const NodeCtx = struct {
     label: [:0]const u8,
 };
 
+const SourceSelction = enum(u8) {
+    osc = 1,
+    sample = 2,
+};
+
+const sources = std.meta.fields(SourceSelction);
+
 const AppState = struct {
     alloc: std.mem.Allocator,
     gctx: *zgpu.GraphicsContext,
 
     player: *zounds.Player,
+    selected_source: SourceSelction,
     sound_buffer: *std.RingBuffer,
 
     // player config
@@ -34,6 +42,7 @@ const AppState = struct {
     // should be wrapped in some audio node kind of thing
     wave_iterator: *zounds.WavetableIterator,
     sequence_source: *zounds.sources.SequenceSource,
+    panther_source: *zounds.sources.SampleSource,
     rand: std.rand.Random,
 
     window: *zglfw.Window,
@@ -42,6 +51,7 @@ const AppState = struct {
     space_pressed: bool = false,
 
     nodes: *std.ArrayList(NodeCtx),
+    player_source: *zounds.sources.AudioSource,
 };
 
 export fn windowRescaleFn(window: *zglfw.Window, xscale: f32, yscale: f32) callconv(.C) void {
@@ -105,8 +115,15 @@ pub fn main() !void {
     const playerContext = try zounds.CoreAudioContext.init(alloc, config);
     defer playerContext.deinit();
 
-    const player = try playerContext.createPlayer(@constCast(&bufferSource.source()));
+    // var buffer_source =
+    var player_source = bufferSource.source();
+
+    const player = try playerContext.createPlayer(@constCast(&player_source));
     _ = try player.setVolume(-20.0);
+
+    const panther_source = try alloc.create(zounds.sources.SampleSource);
+    panther_source.* = try zounds.sources.SampleSource.init(alloc, "res/PinkPanther30.wav");
+
     const state = try alloc.create(AppState);
     defer alloc.destroy(state);
 
@@ -146,7 +163,10 @@ pub fn main() !void {
         .rand = rand.random(),
         .window = window,
         .sequence_source = sequence,
+        .panther_source = panther_source,
         .nodes = nodes,
+        .selected_source = .osc,
+        .player_source = @constCast(&player_source),
     };
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
@@ -217,26 +237,62 @@ fn update(app: *AppState) !void {
             // set Volume
             _ = try player.setVolume(app.vol);
         }
-        if (zgui.sliderInt("Pitch", .{
-            .v = &app.pitchNote,
-            .min = 0,
-            .max = 127,
-        })) {
-            // update pitch
-            app.wave_iterator.setPitch(zounds.utils.pitchFromNote(app.pitchNote));
-        }
 
-        if (zgui.sliderInt("Tick BPM", .{ .v = &app.bpm, .min = 20, .max = 300 })) {
-            app.sequence_source.bpm = @intCast(app.bpm);
-        }
+        if (zgui.treeNode("Select Player Source")) {
+            inline for (sources) |source| {
+                const curr_source: SourceSelction = @enumFromInt(source.value);
+                const selected = app.selected_source == curr_source;
 
-        if (zgui.button("Reset sequencer counter", .{})) {
-            std.debug.print("reset sequence\n", .{});
-            app.sequence_source.note_index = 0;
-            app.sequence_source.ticks = 0;
+                if (zgui.selectable(source.name, .{ .selected = selected })) {
+                    std.debug.print("clicked {s}\n", .{source.name});
+
+                    if (!selected) {
+                        app.selected_source = curr_source;
+                        const next_source = switch (curr_source) {
+                            .osc => app.sequence_source,
+                            .sample => app.panther_source,
+                        };
+                        //player.setAudioSource(next_source.source());
+                        app.player_source.* = next_source.source();
+                    }
+                }
+            }
+            zgui.treePop();
         }
 
         zgui.end();
+    }
+
+    switch (app.selected_source) {
+        .osc => {
+            if (zgui.begin("Oscillator controls", .{})) {
+                if (zgui.sliderInt("Pitch", .{
+                    .v = &app.pitchNote,
+                    .min = 0,
+                    .max = 127,
+                })) {
+                    // update pitch
+                    app.wave_iterator.setPitch(zounds.utils.pitchFromNote(app.pitchNote));
+                }
+
+                if (zgui.sliderInt("Tick BPM", .{ .v = &app.bpm, .min = 20, .max = 300 })) {
+                    app.sequence_source.bpm = @intCast(app.bpm);
+                }
+
+                if (zgui.button("Reset sequencer counter", .{})) {
+                    std.debug.print("reset sequence\n", .{});
+                    app.sequence_source.note_index = 0;
+                    app.sequence_source.ticks = 0;
+                }
+
+                zgui.end();
+            }
+        },
+        .sample => {
+            if (zgui.begin("Sample controls", .{})) {
+                zgui.end();
+            }
+        },
     }
 
     // try renderers.renderNodeGraph(app.nodes.items);
