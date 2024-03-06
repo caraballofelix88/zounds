@@ -24,6 +24,7 @@ const SourceSelction = enum(u8) {
 };
 
 const sources = std.meta.fields(SourceSelction);
+const filter_types = std.meta.fields(zounds.filters.FilterType);
 
 const AppState = struct {
     alloc: std.mem.Allocator,
@@ -43,6 +44,8 @@ const AppState = struct {
     wave_iterator: *zounds.WavetableIterator,
     sequence_source: *zounds.sources.SequenceSource,
     panther_source: *zounds.sources.SampleSource,
+    panther_filter: *zounds.filters.Filter,
+    cutoff_freq: i32 = 1000,
     rand: std.rand.Random,
 
     window: *zglfw.Window,
@@ -52,6 +55,8 @@ const AppState = struct {
 
     nodes: *std.ArrayList(NodeCtx),
     player_source: *zounds.sources.AudioSource,
+    buffer_in: *zounds.sources.AudioSource,
+    selected_filter: zounds.filters.FilterType = .low_pass,
 };
 
 export fn windowRescaleFn(window: *zglfw.Window, xscale: f32, yscale: f32) callconv(.C) void {
@@ -109,7 +114,9 @@ pub fn main() !void {
     var sequence = try alloc.create(zounds.sources.SequenceSource);
     sequence.* = zounds.sources.SequenceSource.init(wave_iterator, 120);
 
-    var bufferSource = try zounds.sources.BufferSource.init(alloc, sequence.source());
+    var buffer_in = sequence.source();
+
+    var bufferSource = try zounds.sources.BufferSource.init(alloc, &buffer_in);
     defer bufferSource.deinit();
 
     const playerContext = try zounds.CoreAudioContext.init(alloc, config);
@@ -123,6 +130,8 @@ pub fn main() !void {
 
     const panther_source = try alloc.create(zounds.sources.SampleSource);
     panther_source.* = try zounds.sources.SampleSource.init(alloc, "res/PinkPanther30.wav");
+
+    const panther_filter = zounds.filters.Filter.init(panther_source.source());
 
     const state = try alloc.create(AppState);
     defer alloc.destroy(state);
@@ -164,9 +173,11 @@ pub fn main() !void {
         .window = window,
         .sequence_source = sequence,
         .panther_source = panther_source,
+        .panther_filter = @constCast(&panther_filter),
         .nodes = nodes,
         .selected_source = .osc,
         .player_source = @constCast(&player_source),
+        .buffer_in = &buffer_in,
     };
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
@@ -250,10 +261,10 @@ fn update(app: *AppState) !void {
                         app.selected_source = curr_source;
                         const next_source = switch (curr_source) {
                             .osc => app.sequence_source,
-                            .sample => app.panther_source,
+                            .sample => app.panther_filter,
                         };
                         //player.setAudioSource(next_source.source());
-                        app.player_source.* = next_source.source();
+                        app.buffer_in.* = next_source.source();
                     }
                 }
             }
@@ -290,6 +301,29 @@ fn update(app: *AppState) !void {
         },
         .sample => {
             if (zgui.begin("Sample controls", .{})) {
+                if (zgui.treeNode("Select filter type")) {
+                    inline for (filter_types) |filter| {
+                        const curr_type: zounds.filters.FilterType = @enumFromInt(filter.value);
+                        const selected = app.selected_filter == curr_type;
+
+                        if (zgui.selectable(filter.name, .{ .selected = selected })) {
+                            std.debug.print("clicked {s}\n", .{filter.name});
+
+                            if (!selected) {
+                                app.selected_filter = curr_type;
+                                app.panther_filter.filter_type = curr_type;
+                            }
+                        }
+                    }
+                    zgui.treePop();
+                }
+
+                if (zgui.sliderInt("cutoff frequency", .{ .min = 0, .max = 10000, .v = &app.cutoff_freq })) {
+                    app.panther_filter.cutoff_freq = @intCast(app.cutoff_freq);
+                }
+                if (zgui.sliderFloat("Q", .{ .min = 0.5, .max = 10.0, .v = &app.panther_filter.q })) {
+                    std.debug.print("Filter Q:\t{}\n", .{app.panther_filter.q});
+                }
                 zgui.end();
             }
         },

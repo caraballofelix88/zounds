@@ -9,6 +9,8 @@ pub const wav = @import("readers/wav.zig");
 
 pub const utils = @import("utils.zig");
 
+pub const filters = @import("filters.zig");
+
 pub const Player = coreaudio.Player;
 
 pub const SampleFormat = enum {

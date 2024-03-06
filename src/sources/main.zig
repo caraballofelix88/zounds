@@ -80,11 +80,11 @@ pub const SampleSource = struct {
 
 pub const BufferSource = struct {
     alloc: std.mem.Allocator,
-    in_source: AudioSource,
+    in_source: *AudioSource,
     buf: *std.RingBuffer,
     size: usize,
 
-    pub fn init(alloc: std.mem.Allocator, in_source: AudioSource) !BufferSource {
+    pub fn init(alloc: std.mem.Allocator, in_source: *AudioSource) !BufferSource {
         // hardcoded size for now
         const size: usize = @as(usize, main.SampleFormat.f32.size()) * 44_100 * 2; // 2 seconds of samples
 
