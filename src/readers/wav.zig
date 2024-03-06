@@ -5,14 +5,6 @@ const main = @import("../main.zig");
 
 // reference: http://soundfile.sapp.org/doc/WaveFormat/
 
-// bytes 0 - 12: RIFF description
-// ChunkId(4)
-// ChunkSize(4)
-//
-// bytes 12 - 36: "fmt" subchunk
-//
-//
-
 // TODO: return results with more detail about the audio stream, pulled from header
 // - sample rate
 // - sample size
@@ -52,13 +44,17 @@ pub const AudioBuffer = struct {
     pub fn frameCount(b: AudioBuffer) usize {
         return b.buf.len / b.format.frameSize();
     }
+
+    pub fn trackLength(b: AudioBuffer) usize {
+        return b.sampleCount() / b.format.sample_rate;
+    }
 };
 
-pub const Field = struct { name: []u8, size_bytes: u8, field_type: type, is_big_endian: bool = false, optional: bool = false };
-
-pub fn FileSpec(comptime T: type) type {
-    return struct { fields: []Field, spec_type: T };
-}
+// pub const Field = struct { name: []u8, size_bytes: u8, field_type: type, is_big_endian: bool = false, optional: bool = false };
+//
+// pub fn FileSpec(comptime T: type) type {
+//     return struct { fields: []Field, spec_type: T };
+// }
 
 // const wav_spec = FileSpec{
 //     .spec_type = WavFormatData,
@@ -76,6 +72,7 @@ pub fn FileSpec(comptime T: type) type {
 //     inline for (spec.fields) |spec_field| {}
 // }
 
+// TODO: maybe generalize file header parsing
 pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
     var file = try std.fs.cwd().openFile(dir, .{});
     defer file.close();
@@ -135,14 +132,11 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
 
     std.debug.print("How big is our buffer?\t {} bytes\n", .{slice.len});
 
-    // convert to desired format here, for now
-    // 44_100hz,f32, mono4
-
     var base_buffer: AudioBuffer = .{
         .format = .{
             .num_channels = num_channels,
             .sample_rate = sample_rate,
-            .sample_format = .f32,
+            .sample_format = .i16,
         },
         .buf = slice,
     };
@@ -152,7 +146,11 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
 
     convert(i16, f32, source_slice, dest_slice);
 
+    base_buffer.format.sample_format = .f32;
     base_buffer.buf = std.mem.sliceAsBytes(dest_slice);
+
+    const track_length = base_buffer.trackLength();
+    std.debug.print("Track length:\t{}:{d:2}\n", .{ @divFloor(track_length, 60), @mod(track_length, 60) });
 
     return base_buffer;
 }
