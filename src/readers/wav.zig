@@ -20,20 +20,38 @@ const main = @import("../main.zig");
 // - channel count + ids
 // - etc.
 
-pub const WavFormatData = struct {
+pub const WavFileData = struct {
     file_size: u32,
     format_length: u32,
-    format_type: u16,
-    num_channels: u16,
-    sample_rate: u32,
     byte_rate: u32,
     block_align: u16,
     bits_per_sample: u16,
+    format: FormatData,
 };
 
-pub const FileBuffer = struct {
-    format_data: WavFormatData,
+// TODO: duplicate of existing struct in ../main.zig
+pub const FormatData = struct {
+    sample_format: main.SampleFormat,
+    num_channels: u16,
+    sample_rate: u32,
+    is_interleaved: bool = true, // channel samples interleaved?
+
+    pub fn frameSize(f: FormatData) usize {
+        return f.sample_format.size() * f.num_channels;
+    }
+};
+
+pub const AudioBuffer = struct {
+    format: FormatData,
     buf: []u8,
+
+    pub fn sampleCount(b: AudioBuffer) usize {
+        return b.buf.len / b.format.sample_format.size();
+    }
+
+    pub fn frameCount(b: AudioBuffer) usize {
+        return b.buf.len / b.format.frameSize();
+    }
 };
 
 pub const Field = struct { name: []u8, size_bytes: u8, field_type: type, is_big_endian: bool = false, optional: bool = false };
@@ -58,7 +76,7 @@ pub fn FileSpec(comptime T: type) type {
 //     inline for (spec.fields) |spec_field| {}
 // }
 
-pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !FileBuffer {
+pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
     var file = try std.fs.cwd().openFile(dir, .{});
     defer file.close();
 
@@ -117,19 +135,50 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !FileBuffer {
 
     std.debug.print("How big is our buffer?\t {} bytes\n", .{slice.len});
 
-    return .{
-        .format_data = .{
-            .file_size = file_size,
-            .format_length = format_length,
-            .format_type = format_type,
+    // convert to desired format here, for now
+    // 44_100hz,f32, mono4
+
+    var base_buffer: AudioBuffer = .{
+        .format = .{
             .num_channels = num_channels,
             .sample_rate = sample_rate,
-            .byte_rate = byte_rate,
-            .block_align = block_align,
-            .bits_per_sample = bits_per_sample,
+            .sample_format = .f32,
         },
         .buf = slice,
     };
+
+    const source_slice: []i16 = @alignCast(std.mem.bytesAsSlice(i16, slice));
+    const dest_slice = try alloc.alloc(f32, source_slice.len);
+
+    convert(i16, f32, source_slice, dest_slice);
+
+    base_buffer.buf = std.mem.sliceAsBytes(dest_slice);
+
+    return base_buffer;
+}
+
+// shoutouts to the mach folks
+fn convert(comptime SourceType: type, comptime DestType: type, source: []SourceType, dest: []DestType) void {
+    // lets start with a single concrete case for now
+    // std.debug.assert(SourceType == u16 and DestType == f32)
+
+    switch (SourceType) {
+        // unsigned to float
+        u16 => {
+            for (source, dest) |*src_sample, *dst_sample| {
+                const half = (std.math.maxInt(SourceType) + 1) / 2;
+                dst_sample.* = (@as(DestType, @floatFromInt(src_sample.*)) - half) * 1.0 / half;
+            }
+        },
+        i16 => {
+            const max: comptime_float = std.math.maxInt(SourceType) + 1;
+            const inv_max = 1.0 / max;
+            for (source, dest) |*src_sample, *dst_sample| {
+                dst_sample.* = @as(DestType, @floatFromInt(src_sample.*)) * inv_max;
+            }
+        },
+        else => unreachable,
+    }
 }
 
 test "readWav" {
