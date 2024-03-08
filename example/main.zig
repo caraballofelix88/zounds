@@ -99,8 +99,8 @@ pub fn main() !void {
     wave_iterator.* = .{
         .wavetable = @constCast(&zounds.sineWave),
         .pitch = 1040.0,
-        //.pitch_generator = @constCast(&zounds.envelope.env_wail),
-        .amp_generator = @constCast(&zounds.envelope.env_percussion),
+        // .pitch_generator = @constCast(&zounds.envelope.env_wail),
+        .amp_generator = @constCast(&zounds.envelope.env_adsr),
         .sample_rate = 44_100,
     };
 
@@ -197,9 +197,9 @@ fn keyCallback(
     action: zglfw.Action,
     mods: zglfw.Mods,
 ) callconv(.C) void {
-    _ = window;
     _ = mods;
     _ = scancode;
+    _ = window;
     if (action == .press) {
         std.debug.print("key pressed: {}\n", .{key});
     }
@@ -227,11 +227,12 @@ fn update(app: *AppState) !void {
     }
 
     if (window.getKey(.a) == .press) {
-        if (app.a_pressed == false) {
-            @constCast(&zounds.envelope.env_percussion).reset();
+        if (!app.a_pressed) {
+            @constCast(&zounds.envelope.env_adsr).attack();
         }
         app.a_pressed = true;
     } else {
+        @constCast(&zounds.envelope.env_adsr).release();
         app.a_pressed = false;
     }
 
