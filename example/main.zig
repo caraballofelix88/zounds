@@ -52,6 +52,7 @@ const AppState = struct {
     bpm: i32 = 120,
     // was space pressed last frame?
     space_pressed: bool = false,
+    a_pressed: bool = false,
 
     nodes: *std.ArrayList(NodeCtx),
     player_source: *zounds.sources.AudioSource,
@@ -60,8 +61,7 @@ const AppState = struct {
 };
 
 export fn windowRescaleFn(window: *zglfw.Window, xscale: f32, yscale: f32) callconv(.C) void {
-    _ = window;
-    zgui.getStyle().scaleAllSizes(@min(xscale, yscale) * 2);
+    zgui.getStyle().scaleAllSizes(@min(xscale, yscale) * window.getContentScale()[0]);
 }
 
 pub fn main() !void {
@@ -98,7 +98,9 @@ pub fn main() !void {
 
     wave_iterator.* = .{
         .wavetable = @constCast(&zounds.sineWave),
-        .pitch = 440.0,
+        .pitch = 1040.0,
+        //.pitch_generator = @constCast(&zounds.envelope.env_wail),
+        .amp_generator = @constCast(&zounds.envelope.env_percussion),
         .sample_rate = 44_100,
     };
 
@@ -112,6 +114,7 @@ pub fn main() !void {
     };
 
     var sequence = try alloc.create(zounds.sources.SequenceSource);
+
     sequence.* = zounds.sources.SequenceSource.init(wave_iterator, 120);
 
     var buffer_in = sequence.source();
@@ -211,6 +214,7 @@ fn update(app: *AppState) !void {
     if (window.getKey(.space) == .press) {
         // button positive edge
         if (app.space_pressed == false) {
+            // TODO: toggle play method
             if (player.is_playing) {
                 player.pause();
             } else {
@@ -220,6 +224,15 @@ fn update(app: *AppState) !void {
         app.space_pressed = true;
     } else {
         app.space_pressed = false;
+    }
+
+    if (window.getKey(.a) == .press) {
+        if (app.a_pressed == false) {
+            @constCast(&zounds.envelope.env_percussion).reset();
+        }
+        app.a_pressed = true;
+    } else {
+        app.a_pressed = false;
     }
 
     const keys = .{ .a, .s, .d, .f };

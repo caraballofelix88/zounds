@@ -11,6 +11,8 @@ pub const utils = @import("utils.zig");
 
 pub const filters = @import("filters.zig");
 
+pub const envelope = @import("envelope.zig");
+
 pub const Player = coreaudio.Player;
 
 pub const SampleFormat = enum {

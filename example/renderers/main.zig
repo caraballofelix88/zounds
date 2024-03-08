@@ -16,7 +16,7 @@ pub fn renderPlot(buf: *std.RingBuffer) !void {
 
     if (zgui.plot.beginPlot("Line Plot", .{ .h = -1.0 })) {
         zgui.plot.setupAxis(.x1, .{ .label = "xaxis" });
-        zgui.plot.setupAxisLimits(.x1, .{ .min = 0, .max = @floatFromInt(440 * 4), .cond = .once });
+        zgui.plot.setupAxisLimits(.x1, .{ .min = 0, .max = @floatFromInt(buf.data.len / 4), .cond = .once });
         zgui.plot.setupAxisLimits(.y1, .{ .min = -1.0, .max = 1.0 });
 
         zgui.plot.setupLegend(.{ .south = true, .west = true }, .{});

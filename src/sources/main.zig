@@ -262,9 +262,9 @@ const megalovania = .{ // 60 = C4, i think?
 
 const simple_notes = .{
     clock.Note{ .pitch = 60, .duration = .quarter },
-    clock.Note{ .pitch = 62, .duration = .quarter },
-    clock.Note{ .pitch = 64, .duration = .quarter },
-    clock.Note{ .pitch = 65, .duration = .quarter },
+    // clock.Note{ .pitch = 62, .duration = .quarter },
+    // clock.Note{ .pitch = 64, .duration = .quarter },
+    // clock.Note{ .pitch = 65, .duration = .quarter },
 };
 
 // represents a single

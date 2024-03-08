@@ -185,5 +185,7 @@ test "readWav" {
 
     // TODO: assert correct specs
 
+    try testing.expectEqual(file.format.sample_rate, 44_100);
+
     defer testing.allocator.free(file.buf);
 }
