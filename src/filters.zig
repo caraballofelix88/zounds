@@ -7,7 +7,6 @@ const sources = @import("sources/main.zig");
 // - https://www.w3.org/TR/audio-eq-cookbook/
 // - https://www.dspguide.com/ch19.htm
 
-// TODO: band_pass, notch, etc.
 pub const FilterType = enum {
     low_pass,
     high_pass,
@@ -61,6 +60,7 @@ pub const Filter = struct {
     prev_y: [2]f32 = std.mem.zeroes([2]f32),
     buf: [4]u8 = undefined,
     filter_type: FilterType = .low_pass,
+    sample_rate: u32 = 44_100,
     cutoff_freq: u32 = 1000,
     q: f32 = 0.707, // -3dB
 
@@ -75,7 +75,7 @@ pub const Filter = struct {
         const next_sample: f32 = std.mem.bytesAsValue(f32, next_sample_raw.?).*;
 
         // TODO: pass in sample rate
-        const coeffs = getFilterCoefficients(f.filter_type, 44_100, f.cutoff_freq, f.q);
+        const coeffs = getFilterCoefficients(f.filter_type, f.sample_rate, f.cutoff_freq, f.q);
 
         const result = f.calcResult(next_sample, coeffs[0], coeffs[1]);
 
@@ -90,15 +90,14 @@ pub const Filter = struct {
         return f.buf[0..];
     }
 
-    // "Direct Form 1"???
+    // "Direct Form 1"
     fn calcResult(f: Filter, x: f32, a: [3]f32, b: [3]f32) f32 {
         return (b[0] / a[0]) * x + (b[1] / a[0]) * f.prev_x[0] + (b[2] / a[0]) * f.prev_x[1] - (a[1] / a[0]) * f.prev_y[0] - (a[2] / a[0]) * f.prev_y[1];
     }
 
-    // TODO: fix
     pub fn hasNextFn(ptr: *anyopaque) bool {
-        _ = ptr;
-        return true;
+        const f: *Filter = @ptrCast(ptr);
+        return f.source().hasNext();
     }
 
     pub fn source(f: *Filter) sources.AudioSource {
