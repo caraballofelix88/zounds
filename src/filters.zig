@@ -96,7 +96,7 @@ pub const Filter = struct {
     }
 
     pub fn hasNextFn(ptr: *anyopaque) bool {
-        const f: *Filter = @ptrCast(ptr);
+        const f: *Filter = @ptrCast(@alignCast(ptr));
         return f.source().hasNext();
     }
 

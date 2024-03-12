@@ -11,36 +11,7 @@ pub const WavFileData = struct {
     byte_rate: u32,
     block_align: u16,
     bits_per_sample: u16,
-    format: FormatData,
-};
-
-// TODO: duplicate of existing struct in ../main.zig
-pub const FormatData = struct {
-    sample_format: main.SampleFormat,
-    num_channels: u16,
-    sample_rate: u32,
-    is_interleaved: bool = true, // channel samples interleaved?
-
-    pub fn frameSize(f: FormatData) usize {
-        return f.sample_format.size() * f.num_channels;
-    }
-};
-
-pub const AudioBuffer = struct {
-    format: FormatData,
-    buf: []u8,
-
-    pub fn sampleCount(b: AudioBuffer) usize {
-        return b.buf.len / b.format.sample_format.size();
-    }
-
-    pub fn frameCount(b: AudioBuffer) usize {
-        return b.buf.len / b.format.frameSize();
-    }
-
-    pub fn trackLength(b: AudioBuffer) usize {
-        return b.sampleCount() / b.format.sample_rate;
-    }
+    format: main.FormatData,
 };
 
 // pub const Field = struct { name: []u8, size_bytes: u8, field_type: type, is_big_endian: bool = false, optional: bool = false };
@@ -126,7 +97,7 @@ test "convert.u16 -> f32" {
 }
 
 // TODO: maybe generalize file header parsing
-pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
+pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
     var file = try std.fs.cwd().openFile(dir, .{});
     defer file.close();
 
@@ -184,7 +155,7 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
 
     const slice = try reader.readAllAlloc(alloc, std.math.maxInt(usize));
 
-    var base_buffer: AudioBuffer = .{
+    var base_buffer: main.AudioBuffer = .{
         .format = .{
             .num_channels = num_channels,
             .sample_rate = sample_rate,

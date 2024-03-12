@@ -12,11 +12,11 @@ pub const AudioSource = struct {
     nextFn: *const fn (ptr: *anyopaque) ?[]u8,
     hasNextFn: *const fn (ptr: *anyopaque) bool,
 
-    pub fn next(self: *AudioSource) ?[]u8 {
+    pub fn next(self: AudioSource) ?[]u8 {
         return self.nextFn(self.ptr);
     }
 
-    pub fn hasNext(self: *AudioSource) bool {
+    pub fn hasNext(self: AudioSource) bool {
         return self.hasNextFn(self.ptr);
     }
 };
@@ -53,7 +53,7 @@ pub const SampleSource = struct {
     pub fn init(alloc: std.mem.Allocator, path: []const u8) !SampleSource {
         const buf = try wav.readWav(alloc, path);
 
-        const iterator = buffered.BufferIterator.init(buf);
+        const iterator = buffered.BufferIterator{ .buf = buf };
 
         return .{ .alloc = alloc, .iterator = iterator };
     }

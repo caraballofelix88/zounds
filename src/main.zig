@@ -38,6 +38,34 @@ pub const SampleFormat = enum {
     }
 };
 
+pub const FormatData = struct {
+    sample_format: SampleFormat,
+    num_channels: u16,
+    sample_rate: u32,
+    is_interleaved: bool = true, // channel samples interleaved?
+
+    pub fn frameSize(f: FormatData) usize {
+        return f.sample_format.size() * f.num_channels;
+    }
+};
+
+pub const AudioBuffer = struct {
+    format: FormatData,
+    buf: []u8,
+
+    pub fn sampleCount(b: AudioBuffer) usize {
+        return b.buf.len / b.format.sample_format.size();
+    }
+
+    pub fn frameCount(b: AudioBuffer) usize {
+        return b.buf.len / b.format.frameSize();
+    }
+
+    pub fn trackLength(b: AudioBuffer) usize {
+        return b.sampleCount() / b.format.sample_rate;
+    }
+};
+
 pub const Context = struct {
     pub const Config = struct {
         sample_format: SampleFormat,
