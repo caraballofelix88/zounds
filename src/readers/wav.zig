@@ -5,13 +5,6 @@ const main = @import("../main.zig");
 
 // reference: http://soundfile.sapp.org/doc/WaveFormat/
 
-// TODO: return results with more detail about the audio stream, pulled from header
-// - sample rate
-// - sample size
-// - sample format
-// - channel count + ids
-// - etc.
-
 pub const WavFileData = struct {
     file_size: u32,
     format_length: u32,
@@ -72,6 +65,66 @@ pub const AudioBuffer = struct {
 //     inline for (spec.fields) |spec_field| {}
 // }
 
+// shoutouts to the mach folks
+// TODO: move to its own file
+fn convert(comptime SourceType: type, comptime DestType: type, source: []SourceType, dest: []DestType) void {
+    // lets start with a single concrete case for now
+    // std.debug.assert(SourceType == u16 and DestType == f32)
+
+    //TODO: assert source data will fit in dest
+
+    switch (DestType) {
+        f32 => {
+            switch (SourceType) {
+                u16 => {
+                    for (source, dest) |*src_sample, *dst_sample| {
+                        const half = (std.math.maxInt(SourceType) + 1) / 2;
+                        dst_sample.* = (@as(DestType, @floatFromInt(src_sample.*)) - half) * 1.0 / half;
+                    }
+                },
+                i16 => {
+                    const max: comptime_float = std.math.maxInt(SourceType) + 1;
+                    const inv_max = 1.0 / max;
+                    for (source, dest) |*src_sample, *dst_sample| {
+                        dst_sample.* = @as(DestType, @floatFromInt(src_sample.*)) * inv_max;
+                    }
+                },
+                f32 => { // just copy the data over
+                    @memcpy(dest, source);
+                },
+                else => unreachable,
+            }
+        },
+        else => unreachable,
+    }
+}
+
+test "convert.i16 -> f32" {
+    const epsilon = 0.001;
+    var source: [3]i16 = .{ 0, 32767, -32768 };
+    const expected: [3]f32 = .{ 0.0, 1.0, -1.0 };
+    var dest: [3]f32 = undefined;
+
+    convert(i16, f32, &source, &dest);
+
+    for (expected, dest) |a, b| {
+        try testing.expectApproxEqAbs(a, b, epsilon);
+    }
+}
+
+test "convert.u16 -> f32" {
+    const epsilon = 0.001;
+    var source: [3]u16 = .{ 0, 32_768, 65_535 };
+    const expected: [3]f32 = .{ -1.0, 0.0, 1.0 };
+    var dest: [3]f32 = undefined;
+
+    convert(u16, f32, &source, &dest);
+
+    for (expected, dest) |a, b| {
+        try testing.expectApproxEqAbs(a, b, epsilon);
+    }
+}
+
 // TODO: maybe generalize file header parsing
 pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
     var file = try std.fs.cwd().openFile(dir, .{});
@@ -125,12 +178,11 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
 
     const data_header = try reader.readBytesNoEof(4);
     _ = data_header;
+
     const data_section_size = try reader.readBytesNoEof(4);
-    std.debug.print("Heres the bytes:\t{any} : current head is {any}\n", .{ data_section_size, reader.context.start }); // "data    "
+    _ = data_section_size;
 
     const slice = try reader.readAllAlloc(alloc, std.math.maxInt(usize));
-
-    std.debug.print("How big is our buffer?\t {} bytes\n", .{slice.len});
 
     var base_buffer: AudioBuffer = .{
         .format = .{
@@ -155,37 +207,13 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !AudioBuffer {
     return base_buffer;
 }
 
-// shoutouts to the mach folks
-fn convert(comptime SourceType: type, comptime DestType: type, source: []SourceType, dest: []DestType) void {
-    // lets start with a single concrete case for now
-    // std.debug.assert(SourceType == u16 and DestType == f32)
-
-    switch (SourceType) {
-        // unsigned to float
-        u16 => {
-            for (source, dest) |*src_sample, *dst_sample| {
-                const half = (std.math.maxInt(SourceType) + 1) / 2;
-                dst_sample.* = (@as(DestType, @floatFromInt(src_sample.*)) - half) * 1.0 / half;
-            }
-        },
-        i16 => {
-            const max: comptime_float = std.math.maxInt(SourceType) + 1;
-            const inv_max = 1.0 / max;
-            for (source, dest) |*src_sample, *dst_sample| {
-                dst_sample.* = @as(DestType, @floatFromInt(src_sample.*)) * inv_max;
-            }
-        },
-        else => unreachable,
-    }
-}
-
 test "readWav" {
-    const dir = "res/evil_laugh.wav";
+    const dir = "../../res/evil_laugh.wav";
     const file = try readWav(testing.allocator, dir);
+    defer testing.allocator.free(file.buf);
 
     // TODO: assert correct specs
-
-    try testing.expectEqual(file.format.sample_rate, 44_100);
-
-    defer testing.allocator.free(file.buf);
+    try testing.expectEqual(44_100, file.format.sample_rate);
+    try testing.expectEqual(.i16, file.format.sample_format);
+    try testing.expectEqual(1, file.format.num_channels);
 }
