@@ -81,8 +81,8 @@ pub const WavetableIterator = struct {
     phase: f32 = 0,
     wavetable: []f32,
     pitch: f32,
-    pitch_generator: ?*envelope.Envelope = undefined, // Signal(f32)
-    amp_generator: ?*envelope.Envelope = undefined,
+    pitch_generator: ?*envelope.Envelope = null, // Signal(f32)???
+    amp_generator: ?*envelope.Envelope = null,
     sample_rate: f32,
     buf: [4]u8 = undefined,
     //TODO: ^ Honestly, feels weird to just point to a single sample by ref? this will surely break eventually

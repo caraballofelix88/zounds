@@ -296,9 +296,9 @@ pub const SequenceSource = struct {
             s.note_index += 1;
             s.ticks = 0;
 
-            std.debug.print("||||| \t ticks: {} \t interval: {} \t note: {}\n", .{ s.ticks, tick_interval, s.note_index });
+            // std.debug.print("||||| \t ticks: {} \t interval: {} \t note: {}\n", .{ s.ticks, tick_interval, s.note_index });
             if (s.note_index >= s.notes.len) {
-                std.debug.print("note sequence complete\n", .{});
+                // std.debug.print("note sequence complete\n", .{});
                 s.note_index = 0;
             }
         }

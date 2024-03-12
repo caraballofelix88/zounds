@@ -96,11 +96,19 @@ pub fn main() !void {
     const wave_iterator = try alloc.create(zounds.WavetableIterator);
     defer alloc.destroy(wave_iterator);
 
+    const env_wail = zounds.envelope.Envelope.init(&zounds.envelope.wail, true);
+    _ = env_wail;
+
+    const env_percussion = zounds.envelope.Envelope.init(&zounds.envelope.percussion, false);
+    _ = env_percussion;
+
+    var env_adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, false);
+
     wave_iterator.* = .{
         .wavetable = @constCast(&zounds.sineWave),
         .pitch = 1040.0,
-        // .pitch_generator = @constCast(&zounds.envelope.env_wail),
-        .amp_generator = @constCast(&zounds.envelope.env_adsr),
+        // .pitch_generator = &env_wail,
+        .amp_generator = &env_adsr,
         .sample_rate = 44_100,
     };
 
@@ -114,6 +122,7 @@ pub fn main() !void {
     };
 
     var sequence = try alloc.create(zounds.sources.SequenceSource);
+    defer alloc.destroy(sequence);
 
     sequence.* = zounds.sources.SequenceSource.init(wave_iterator, 120);
 
@@ -228,11 +237,17 @@ fn update(app: *AppState) !void {
 
     if (window.getKey(.a) == .press) {
         if (!app.a_pressed) {
-            @constCast(&zounds.envelope.env_adsr).attack();
+            if (app.wave_iterator.amp_generator) |env| {
+                env.attack();
+            }
         }
         app.a_pressed = true;
     } else {
-        @constCast(&zounds.envelope.env_adsr).release();
+        if (app.a_pressed) {
+            if (app.wave_iterator.amp_generator) |env| {
+                env.release();
+            }
+        }
         app.a_pressed = false;
     }
 
