@@ -29,7 +29,7 @@ const filter_types = std.meta.fields(zounds.filters.FilterType);
 const AppState = struct {
     alloc: std.mem.Allocator,
     gctx: *zgpu.GraphicsContext,
-
+    window: *zglfw.Window,
     player: *zounds.Player,
     selected_source: SourceSelction,
     sound_buffer: *std.RingBuffer,
@@ -40,24 +40,21 @@ const AppState = struct {
     // audio source config
     pitchNote: i32,
 
-    // should be wrapped in some audio node kind of thing
     wave_iterator: *zounds.WavetableIterator,
     sequence_source: *zounds.sources.SequenceSource,
+
     panther_source: *zounds.sources.SampleSource,
     panther_filter: *zounds.filters.Filter,
-    cutoff_freq: i32 = 1000,
-    rand: std.rand.Random,
+    filter_cutoff_hz: i32 = 1000,
+    selected_filter: zounds.filters.FilterType = .low_pass,
 
-    window: *zglfw.Window,
+    player_source: *zounds.sources.AudioSource,
+    buffer_in: *zounds.sources.AudioSource,
+
     bpm: i32 = 120,
     // was space pressed last frame?
     space_pressed: bool = false,
     a_pressed: bool = false,
-
-    nodes: *std.ArrayList(NodeCtx),
-    player_source: *zounds.sources.AudioSource,
-    buffer_in: *zounds.sources.AudioSource,
-    selected_filter: zounds.filters.FilterType = .low_pass,
 };
 
 export fn windowRescaleFn(window: *zglfw.Window, xscale: f32, yscale: f32) callconv(.C) void {
@@ -96,34 +93,17 @@ pub fn main() !void {
     const wave_iterator = try alloc.create(zounds.WavetableIterator);
     defer alloc.destroy(wave_iterator);
 
-    const env_wail = zounds.envelope.Envelope.init(&zounds.envelope.wail, true);
-    _ = env_wail;
-
-    const env_percussion = zounds.envelope.Envelope.init(&zounds.envelope.percussion, false);
-    _ = env_percussion;
-
     var env_adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, false);
 
     wave_iterator.* = .{
         .wavetable = @constCast(&zounds.sineWave),
         .pitch = 1040.0,
-        // .pitch_generator = &env_wail,
         .amp_generator = &env_adsr,
-        .sample_rate = 44_100,
-    };
-
-    const tick_iterator = try alloc.create(zounds.WavetableIterator);
-    defer alloc.destroy(tick_iterator);
-
-    tick_iterator.* = .{
-        .wavetable = @constCast(&zounds.hiss),
-        .pitch = 50.0,
         .sample_rate = 44_100,
     };
 
     var sequence = try alloc.create(zounds.sources.SequenceSource);
     defer alloc.destroy(sequence);
-
     sequence.* = zounds.sources.SequenceSource.init(wave_iterator, 120);
 
     var buffer_in = sequence.source();
@@ -134,7 +114,6 @@ pub fn main() !void {
     const playerContext = try zounds.CoreAudioContext.init(alloc, config);
     defer playerContext.deinit();
 
-    // var buffer_source =
     var player_source = bufferSource.source();
 
     const player = try playerContext.createPlayer(@constCast(&player_source));
@@ -148,31 +127,6 @@ pub fn main() !void {
     const state = try alloc.create(AppState);
     defer alloc.destroy(state);
 
-    const node_a_name: [:0]const u8 = try alloc.dupeZ(u8, "Node A");
-    const node_b_name: [:0]const u8 = try alloc.dupeZ(u8, "Node B");
-    const nodeA = NodeCtx{
-        .x = 100,
-        .y = 100,
-        .node = zounds.sources.AudioNode.init(node_a_name),
-        .label = node_a_name,
-    };
-    const nodeB = NodeCtx{
-        .x = 200,
-        .y = 200,
-        .node = zounds.sources.AudioNode.init(node_b_name),
-        .label = node_b_name,
-    };
-
-    var nodes = try alloc.create(std.ArrayList(NodeCtx));
-    nodes.* = std.ArrayList(NodeCtx).init(alloc);
-    defer alloc.destroy(nodes);
-    defer nodes.deinit();
-
-    _ = try nodes.append(nodeA);
-    _ = try nodes.append(nodeB);
-
-    var rand = std.rand.DefaultPrng.init(0);
-
     state.* = .{
         .alloc = alloc,
         .gctx = gctx,
@@ -181,12 +135,10 @@ pub fn main() !void {
         .vol = -20.0,
         .wave_iterator = wave_iterator,
         .sound_buffer = bufferSource.buf,
-        .rand = rand.random(),
         .window = window,
         .sequence_source = sequence,
         .panther_source = panther_source,
         .panther_filter = @constCast(&panther_filter),
-        .nodes = nodes,
         .selected_source = .osc,
         .player_source = @constCast(&player_source),
         .buffer_in = &buffer_in,
@@ -199,21 +151,6 @@ pub fn main() !void {
     }
 }
 
-fn keyCallback(
-    window: *zglfw.Window,
-    key: zglfw.Key,
-    scancode: i32,
-    action: zglfw.Action,
-    mods: zglfw.Mods,
-) callconv(.C) void {
-    _ = mods;
-    _ = scancode;
-    _ = window;
-    if (action == .press) {
-        std.debug.print("key pressed: {}\n", .{key});
-    }
-}
-
 fn update(app: *AppState) !void {
     const gctx = app.gctx;
     const player = app.player;
@@ -223,7 +160,6 @@ fn update(app: *AppState) !void {
     if (window.getKey(.space) == .press) {
         // button positive edge
         if (app.space_pressed == false) {
-            // TODO: toggle play method
             if (player.is_playing) {
                 player.pause();
             } else {
@@ -250,10 +186,6 @@ fn update(app: *AppState) !void {
         }
         app.a_pressed = false;
     }
-
-    const keys = .{ .a, .s, .d, .f };
-    _ = keys;
-    _ = window.setKeyCallback(keyCallback);
 
     zgui.backend.newFrame(
         gctx.swapchain_descriptor.width,
@@ -292,7 +224,6 @@ fn update(app: *AppState) !void {
                             .osc => app.sequence_source,
                             .sample => app.panther_filter,
                         };
-                        //player.setAudioSource(next_source.source());
                         app.buffer_in.* = next_source.source();
                     }
                 }
@@ -347,8 +278,8 @@ fn update(app: *AppState) !void {
                     zgui.treePop();
                 }
 
-                if (zgui.sliderInt("cutoff frequency", .{ .min = 0, .max = 10000, .v = &app.cutoff_freq })) {
-                    app.panther_filter.cutoff_freq = @intCast(app.cutoff_freq);
+                if (zgui.sliderInt("cutoff frequency", .{ .min = 0, .max = 10000, .v = &app.filter_cutoff_hz })) {
+                    app.panther_filter.cutoff_freq = @intCast(app.filter_cutoff_hz);
                 }
                 if (zgui.sliderFloat("Q", .{ .min = 0.5, .max = 10.0, .v = &app.panther_filter.q })) {
                     std.debug.print("Filter Q:\t{}\n", .{app.panther_filter.q});
@@ -358,8 +289,6 @@ fn update(app: *AppState) !void {
         },
     }
 
-    // try renderers.renderNodeGraph(app.nodes.items);
-
     if (zgui.begin("Plot", .{})) {
         try renderers.renderPlot(app.sound_buffer);
         zgui.end();
@@ -368,9 +297,6 @@ fn update(app: *AppState) !void {
 
 fn draw(app: *AppState) void {
     const gctx = app.gctx;
-
-    // const fb_width = gctx.swapchain_descriptor.width;
-    // const fb_height = gctx.swapchain_descriptor.height;
 
     const swapchain_texv = gctx.swapchain.getCurrentTextureView();
     defer swapchain_texv.release();
