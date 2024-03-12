@@ -40,7 +40,7 @@ const AppState = struct {
     // audio source config
     pitchNote: i32,
 
-    wave_iterator: *zounds.WavetableIterator,
+    wave_iterator: *zounds.osc.WavetableIterator,
     sequence_source: *zounds.sources.SequenceSource,
 
     panther_source: *zounds.sources.SampleSource,
@@ -90,13 +90,13 @@ pub fn main() !void {
 
     const config = zounds.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
 
-    const wave_iterator = try alloc.create(zounds.WavetableIterator);
+    const wave_iterator = try alloc.create(zounds.osc.WavetableIterator);
     defer alloc.destroy(wave_iterator);
 
     var env_adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, false);
 
     wave_iterator.* = .{
-        .wavetable = @constCast(&zounds.sineWave),
+        .wavetable = @constCast(&zounds.osc.bigWave),
         .pitch = 1040.0,
         .amp_generator = &env_adsr,
         .sample_rate = 44_100,

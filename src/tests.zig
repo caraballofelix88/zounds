@@ -2,6 +2,9 @@ const std = @import("std");
 
 pub const main = @import("main.zig");
 
+// envelopes, ramps
+pub const envelope = @import("envelope.zig");
+
 // file reader
 pub const wav = @import("readers/wav.zig");
 

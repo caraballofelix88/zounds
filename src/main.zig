@@ -1,16 +1,10 @@
 const std = @import("std");
-const coreaudio = @import("backends/coreaudio.zig");
+pub const coreaudio = @import("backends/coreaudio.zig");
 pub const sources = @import("sources/main.zig");
-const osc = @import("sources/osc.zig");
-
-const adder = @import("adder/main.zig");
-
+pub const osc = @import("sources/osc.zig");
 pub const wav = @import("readers/wav.zig");
-
 pub const utils = @import("utils.zig");
-
 pub const filters = @import("filters.zig");
-
 pub const envelope = @import("envelope.zig");
 
 pub const Player = coreaudio.Player;
@@ -74,10 +68,6 @@ pub const Context = struct {
         frames_per_packet: u8,
     };
 };
-
-pub const sineWave = osc.bigWave;
-pub const hiss = osc.hiss;
-pub const WavetableIterator = osc.WavetableIterator;
 
 pub const ChannelPosition = enum { left, right };
 
