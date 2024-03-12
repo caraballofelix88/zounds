@@ -1,17 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
 
-// TODO: Input Signals vs Audio Sources? They should just be the same, yea?
-
 const RampTypeTag = enum { linear, exp };
 const RampType = union(RampTypeTag) {
     linear: void,
     exp: f32,
 };
 
-// TODO: Add sample_rate comptime?
 // TODO: @floor might result in some weird values. Keep an eye on this
-// TODO: Is this an abuse of tagged unions? NAH, PROLLY NOT
 const DurationTags = enum { millis, seconds, samples };
 const Duration = union(DurationTags) {
     millis: u32,
@@ -99,7 +95,6 @@ const Ramp = struct {
     }
 };
 
-// TODO: Try stateless ramp struct?
 test "Ramp" {
     const args: Ramp = .{
         .from = 1.0,
@@ -151,7 +146,6 @@ pub const percussion: [2]Ramp = .{
     },
 };
 
-// TODO: construct ADSR envelope UI?
 // ADSR state?
 pub const adsr: [4]Ramp = .{
     .{ // attack
@@ -187,7 +181,7 @@ pub const adsr: [4]Ramp = .{
 
 // Maintains transition state between Ramps.
 // TODO: create a method to start at some arbitrary point anywhere within envelope duration?
-// TODO: add state machine logic
+// TODO: pass in discrete states and transitions to envelope, remove static attack/release
 pub const Envelope = struct {
     ramps: []const Ramp,
     ramp_index: usize = 0,
@@ -206,7 +200,7 @@ pub const Envelope = struct {
 
     pub fn next(e: *Envelope) f32 {
         if (!e.hasNext()) {
-            return e.latest_value; // e.curr_ramp.at(e.sample_index);
+            return e.latest_value;
         }
 
         const result = e.curr_ramp.at(e.sample_index);
@@ -224,7 +218,7 @@ pub const Envelope = struct {
                 e.curr_ramp.from = e.latest_value;
                 e.sample_index = 0;
             } else {
-                // if should loop, reset to
+                // if should loop, reset to initial ramp
                 if (e.should_loop) {
                     e.ramp_index = 0;
                     e.curr_ramp = e.ramps[0];
@@ -246,7 +240,6 @@ pub const Envelope = struct {
             return;
         }
 
-        std.debug.print("Attack\n", .{});
         e.ramp_index = 0;
         e.sample_index = 0;
         e.curr_ramp = e.ramps[0];
@@ -258,7 +251,6 @@ pub const Envelope = struct {
             return;
         }
 
-        std.debug.print("Release\n", .{});
         e.ramp_index = 3;
         e.sample_index = 0;
         e.curr_ramp = e.ramps[3];
@@ -267,7 +259,24 @@ pub const Envelope = struct {
 };
 
 test "Envelope" {
-    var e = Envelope.init(&wail, false);
+    var ramps: [2]Ramp = .{
+        .{
+            .from = 300.0,
+            .to = 1500.0,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = .{ .millis = 2000 },
+        },
+        .{
+            .from = 1500.0,
+            .to = 300.0,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = .{ .millis = 10 },
+        },
+    };
+
+    var e = Envelope.init(&ramps, false);
 
     try testing.expectEqual(e.next(), 300.0);
     try testing.expectEqual(e.sample_index, 1);
