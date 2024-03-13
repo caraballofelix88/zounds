@@ -2,10 +2,6 @@ const std = @import("std");
 const sources = @import("main.zig");
 const envelope = @import("../envelope.zig");
 
-// TODO: provide a sample generator function?
-// TODO:(needless optimization) you only really need to hold onto samples for [0, pi/2] for cyclic waveforms,
-// the rest of the waveform can be derived from that first chunk
-
 pub const Waveform = enum {
     square,
     sine,
@@ -111,6 +107,7 @@ pub const WavetableIterator = struct {
 
         self.buf = @bitCast(result);
         self.phase += @as(f32, @floatFromInt(self.wavetable.len)) * pitch / self.sample_rate;
+
         while (self.phase >= len) {
             self.phase -= len;
         }

@@ -21,31 +21,6 @@ pub const AudioSource = struct {
     }
 };
 
-pub const OscillatorSource = struct {
-    iterator: osc.SineIterator(0.5, 440, 44_100),
-
-    pub fn init() OscillatorSource {
-        const iterator = osc.SineIterator(0.5, 440, 44_100){};
-
-        return .{ .iterator = iterator };
-    }
-
-    pub fn nextFn(ptr: *anyopaque) ?[]u8 {
-        const s: *OscillatorSource = @ptrCast(@alignCast(ptr));
-
-        return s.iterator.next();
-    }
-
-    pub fn hasNextFn(ptr: *anyopaque) bool {
-        _ = ptr;
-        return true;
-    }
-
-    pub fn source(self: *OscillatorSource) AudioSource {
-        return .{ .ptr = self, .nextFn = nextFn, .hasNextFn = hasNextFn };
-    }
-};
-
 pub const SampleSource = struct {
     alloc: std.mem.Allocator,
     iterator: buffered.BufferIterator,
@@ -120,21 +95,17 @@ pub const BufferSource = struct {
     }
 };
 
-// TODO: generalize one and zero based on sample type
-const zero: [4]u8 = std.mem.zeroes([4]u8);
-const one: [4]u8 = @bitCast(@as(f32, 1.0));
-
 // TODO: break out into a separate file for timekeeping/clock stuff
-pub const TickSource = struct {
+pub const MetronomeSource = struct {
     bpm: u32,
     ticks: u64 = 0,
 
-    pub fn init(bpm: u32) TickSource {
+    pub fn init(bpm: u32) MetronomeSource {
         return .{ .bpm = bpm };
     }
 
     pub fn nextFn(ptr: *anyopaque) ?[]u8 {
-        const s: *TickSource = @ptrCast(@alignCast(ptr));
+        const s: *MetronomeSource = @ptrCast(@alignCast(ptr));
 
         const samples_per_min = 60 * 44_100;
         const samples_per_beat = samples_per_min / s.bpm;
@@ -144,9 +115,11 @@ pub const TickSource = struct {
 
         var result: []u8 = undefined;
         if (s.ticks >= samples_per_beat) {
-            result = @constCast(one[0..]);
+            const one: f32 = 1.0;
+            result = @bitCast(one);
         } else {
-            result = @constCast(zero[0..]);
+            const zero: f32 = 0.0;
+            result = zero;
         }
 
         if (s.ticks >= samples_per_beat + tick_interval) {
@@ -161,85 +134,7 @@ pub const TickSource = struct {
         return true;
     }
 
-    pub fn source(self: *TickSource) AudioSource {
-        return .{ .ptr = self, .nextFn = nextFn, .hasNextFn = hasNextFn };
-    }
-};
-
-// TODO: rename, more of a gate, really
-pub const MuxSource = struct {
-    a: AudioSource,
-    b: AudioSource,
-    buf: [4]u8 = undefined,
-
-    pub fn init(a: AudioSource, b: AudioSource) MuxSource {
-        return .{ .a = a, .b = b };
-    }
-
-    pub fn nextFn(ptr: *anyopaque) ?[]u8 {
-        const s: *MuxSource = @ptrCast(@alignCast(ptr));
-
-        const a: ?[]u8 = s.a.next();
-        const b: ?[]u8 = s.b.next();
-
-        // TODO: ugly casting to do math, find out how to really clean this up
-        const fl_a: f32 = std.mem.bytesAsValue(f32, a.?).*;
-        const fl_b: f32 = std.mem.bytesAsValue(f32, b.?).*;
-
-        const result = fl_a * fl_b;
-
-        std.debug.print("mux result: {}\n", .{result});
-
-        s.buf = @bitCast(result);
-
-        return s.buf[0..];
-    }
-
-    pub fn hasNextFn(ptr: *anyopaque) bool {
-        _ = ptr;
-        return true;
-    }
-
-    pub fn source(self: *MuxSource) AudioSource {
-        return .{ .ptr = self, .nextFn = nextFn, .hasNextFn = hasNextFn };
-    }
-};
-
-// why does this sound so bad
-// lol why did i duplicate this
-pub const AddSource = struct {
-    a: AudioSource,
-    b: AudioSource,
-    buf: [4]u8 = undefined,
-
-    pub fn init(a: AudioSource, b: AudioSource) AddSource {
-        return .{ .a = a, .b = b };
-    }
-
-    pub fn nextFn(ptr: *anyopaque) ?[]u8 {
-        const s: *AddSource = @ptrCast(@alignCast(ptr));
-
-        const a: ?[]u8 = s.a.next();
-        const b: ?[]u8 = s.b.next();
-
-        // TODO: ugly casting to do math, find out how to really clean this up
-
-        const fl_a: f32 = std.mem.bytesAsValue(f32, a.?).*;
-        const fl_b: f32 = std.mem.bytesAsValue(f32, b.?).*;
-
-        const result = (fl_a + fl_b) * 0.5;
-
-        s.buf = @bitCast(result);
-
-        return s.buf[0..];
-    }
-
-    pub fn hasNextFn(ptr: *anyopaque) bool {
-        _ = ptr;
-        return true;
-    }
-
-    pub fn source(self: *AddSource) AudioSource {
+    pub fn source(self: *MetronomeSource) AudioSource {
         return .{ .ptr = self, .nextFn = nextFn, .hasNextFn = hasNextFn };
     }
 };
@@ -267,9 +162,7 @@ const simple_notes = .{
     // clock.Note{ .pitch = 65, .duration = .quarter },
 };
 
-// represents a single
 pub const SequenceSource = struct {
-    //sources: []AudioSource,
     iterator: *osc.WavetableIterator,
     bpm: u32,
     ticks: u64 = 0,
@@ -296,16 +189,14 @@ pub const SequenceSource = struct {
             s.note_index += 1;
             s.ticks = 0;
 
-            // std.debug.print("||||| \t ticks: {} \t interval: {} \t note: {}\n", .{ s.ticks, tick_interval, s.note_index });
             if (s.note_index >= s.notes.len) {
-                // std.debug.print("note sequence complete\n", .{});
                 s.note_index = 0;
             }
         }
         // feels like something we needn't do every iteration
         s.iterator.setPitch(utils.pitchFromNote(curr_note.pitch));
 
-        return s.iterator.next().?;
+        return s.iterator.next();
     }
 
     // TODO: are sequences finite? do we just loop?
@@ -318,16 +209,3 @@ pub const SequenceSource = struct {
         return .{ .ptr = self, .nextFn = nextFn, .hasNextFn = hasNextFn };
     }
 };
-
-pub const AudioNode = struct {
-    in: ?*AudioNode,
-    out: ?*AudioNode,
-    graph: ?*AudioGraph,
-    name: []const u8,
-
-    pub fn init(name: []const u8) AudioNode {
-        return AudioNode{ .in = null, .out = null, .graph = null, .name = name };
-    }
-};
-// TODO: implement node structure with sources
-const AudioGraph = struct { alloc: std.mem.Allocator, nodes: AudioNode, sample_rate: u32, sample_ticks: u64 };
