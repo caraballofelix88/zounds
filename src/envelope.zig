@@ -8,7 +8,7 @@ const RampType = union(RampTypeTag) {
     exp: f32,
 };
 
-// TODO: @floor might result in some weird values. Keep an eye on this
+// NOTE: using @floor will result in some inexact values. Keep an eye on this
 const DurationTags = enum { millis, seconds, samples };
 const Duration = union(DurationTags) {
     millis: u32,
@@ -72,6 +72,10 @@ const Ramp = struct {
         }
 
         if (index <= 0) {
+            return r.from;
+        }
+
+        if (r.from == r.to) {
             return r.from;
         }
 
@@ -180,26 +184,23 @@ pub const adsr: [4]Ramp = .{
     },
 };
 
-// Maintains transition state between Ramps.
-// TODO: create a method to start at some arbitrary point anywhere within envelope duration?
-// TODO: pass in discrete states and transitions to envelope, remove static attack/release
+// TODO: create a method to start at some arbitrary point anywhere within envelope duration? Using context?
+// TODO: rename to ADSR
 pub const Envelope = struct {
     ramps: []const Ramp,
+    trigger: signals.Signal(bool) = .{ .static = false },
+    active: bool = false,
+    prev_trigger_state: bool = false,
     ramp_index: usize = 0,
     curr_ramp: Ramp,
     sample_index: usize = 0,
     latest_value: f32 = 0.0,
-    should_loop: bool = false,
 
-    trigger: signals.Signal(bool) = .{ .static = false },
-    was_pressed: bool = false,
-
-    pub fn init(ramps: []const Ramp, trigger: signals.Signal(bool), should_loop: bool) Envelope {
+    pub fn init(ramps: []const Ramp, trigger: signals.Signal(bool)) Envelope {
         return .{
             .ramps = ramps,
             .trigger = trigger,
             .curr_ramp = ramps[0],
-            .should_loop = should_loop,
         };
     }
 
@@ -207,16 +208,16 @@ pub const Envelope = struct {
         var e: *Envelope = @ptrCast(@alignCast(ptr));
 
         if (e.trigger.get()) {
-            if (!e.was_pressed) {
+            if (!e.prev_trigger_state) {
                 std.debug.print("attack attack\n", .{});
                 e.attack();
             }
-            e.was_pressed = true;
+            e.prev_trigger_state = true;
         } else {
-            if (e.was_pressed) {
+            if (e.prev_trigger_state) {
                 std.debug.print("release release\n", .{});
                 e.release();
-                e.was_pressed = false;
+                e.prev_trigger_state = false;
             }
         }
 
@@ -239,39 +240,26 @@ pub const Envelope = struct {
                 e.curr_ramp.from = e.latest_value;
                 e.sample_index = 0;
             } else {
-                // if should loop, reset to initial ramp
-                if (e.should_loop) {
-                    e.ramp_index = 0;
-                    e.curr_ramp = e.ramps[0];
-                    e.sample_index = 0;
-                    e.latest_value = e.ramps[0].from;
-                }
+                e.active = false;
             }
         }
 
         return result;
     }
 
-    pub fn hasNext(e: Envelope) bool {
-        return e.ramp_index < e.ramps.len;
+    fn hasNext(e: Envelope) bool {
+        return e.active and e.ramp_index < e.ramps.len;
     }
 
-    pub fn attack(e: *Envelope) void {
-        if (e.ramps.len != 4) {
-            return;
-        }
-
+    fn attack(e: *Envelope) void {
+        e.active = true;
         e.ramp_index = 0;
         e.sample_index = 0;
         e.curr_ramp = e.ramps[0];
         e.curr_ramp.from = e.latest_value;
     }
 
-    pub fn release(e: *Envelope) void {
-        if (e.ramps.len != 4) {
-            return;
-        }
-
+    fn release(e: *Envelope) void {
         e.ramp_index = 3;
         e.sample_index = 0;
         e.curr_ramp = e.ramps[3];
@@ -284,25 +272,52 @@ pub const Envelope = struct {
 };
 
 test "Envelope" {
-    var ramps: [2]Ramp = .{
+    var ramps: [4]Ramp = .{
         .{
-            .from = 300.0,
-            .to = 1500.0,
+            .from = 0.0,
+            .to = 10.0,
             .ramp_type = .linear,
             .sample_rate = 44_100,
-            .duration = .{ .millis = 2000 },
+            .duration = .{ .samples = 5 },
+        },
+        .{
+            .from = 10.0,
+            .to = 8.0,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = .{ .samples = 2 },
+        },
+        .{
+            .from = 8.0,
+            .to = 8.0,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = .{ .samples = 5 },
         },
         .{
             .from = 1500.0,
             .to = 300.0,
             .ramp_type = .linear,
             .sample_rate = 44_100,
-            .duration = .{ .millis = 10 },
+            .duration = .{ .samples = 10 },
         },
     };
 
-    var e = Envelope.init(&ramps, false);
+    var trigger: bool = false;
+    var e = Envelope.init(&ramps, .{ .ptr = &trigger });
 
-    try testing.expectEqual(e.next(), 300.0);
-    try testing.expectEqual(e.sample_index, 1);
+    // test default value on inactive envelope
+    try testing.expectEqual(0.0, Envelope.nextFn(&e));
+    try testing.expectEqual(0.0, Envelope.nextFn(&e));
+
+    // attack
+    trigger = true;
+    try testing.expectEqual(0.0, Envelope.nextFn(&e));
+    try testing.expectEqual(2.0, Envelope.nextFn(&e));
+
+    // TODO:
+    // Test shift to inactive state
+    // Test sequential transition between ramps
+    // test release retains latest value
+    // test attack retains latest value
 }

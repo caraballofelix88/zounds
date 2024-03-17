@@ -119,7 +119,7 @@ pub fn main() !void {
 
     var a_pressed = false;
     const button: zounds.signals.Signal(bool) = .{ .ptr = &a_pressed };
-    var adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, button, false);
+    var adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, button);
     var wobble = Wobble{ .ctx = &audio_ctx, .base_pitch = .{ .ptr = &pitch } };
     var signal_osc = zounds.signals.TestWavetableOscNode{
         .ctx = &audio_ctx,
