@@ -1,4 +1,5 @@
 const std = @import("std");
+const signals = @import("signals.zig");
 const testing = std.testing;
 
 const RampTypeTag = enum { linear, exp };
@@ -190,15 +191,35 @@ pub const Envelope = struct {
     latest_value: f32 = 0.0,
     should_loop: bool = false,
 
-    pub fn init(ramps: []const Ramp, should_loop: bool) Envelope {
+    trigger: signals.Signal(bool) = .{ .static = false },
+    was_pressed: bool = false,
+
+    pub fn init(ramps: []const Ramp, trigger: signals.Signal(bool), should_loop: bool) Envelope {
         return .{
             .ramps = ramps,
+            .trigger = trigger,
             .curr_ramp = ramps[0],
             .should_loop = should_loop,
         };
     }
 
-    pub fn next(e: *Envelope) f32 {
+    pub fn nextFn(ptr: *anyopaque) f32 {
+        var e: *Envelope = @ptrCast(@alignCast(ptr));
+
+        if (e.trigger.get()) {
+            if (!e.was_pressed) {
+                std.debug.print("attack attack\n", .{});
+                e.attack();
+            }
+            e.was_pressed = true;
+        } else {
+            if (e.was_pressed) {
+                std.debug.print("release release\n", .{});
+                e.release();
+                e.was_pressed = false;
+            }
+        }
+
         if (!e.hasNext()) {
             return e.latest_value;
         }
@@ -255,6 +276,10 @@ pub const Envelope = struct {
         e.sample_index = 0;
         e.curr_ramp = e.ramps[3];
         e.curr_ramp.from = e.latest_value;
+    }
+
+    pub fn node(e: *Envelope) signals.Node(f32) {
+        return .{ .ptr = e, .nextFn = nextFn };
     }
 };
 

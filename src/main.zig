@@ -6,6 +6,7 @@ pub const wav = @import("readers/wav.zig");
 pub const utils = @import("utils.zig");
 pub const filters = @import("filters.zig");
 pub const envelope = @import("envelope.zig");
+pub const signals = @import("signals.zig");
 
 pub const Player = coreaudio.Player;
 

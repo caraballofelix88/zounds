@@ -40,8 +40,9 @@ const AppState = struct {
     // audio source config
     pitchNote: i32,
 
-    wave_iterator: *zounds.osc.WavetableIterator,
-    sequence_source: *zounds.sources.SequenceSource,
+    pitch: *f32,
+
+    audio_ctx: *zounds.signals.AudioContext,
 
     panther_source: *zounds.sources.SampleSource,
     panther_filter: *zounds.filters.Filter,
@@ -49,17 +50,40 @@ const AppState = struct {
     selected_filter: zounds.filters.FilterType = .low_pass,
 
     player_source: *zounds.sources.AudioSource,
-    buffer_in: *zounds.sources.AudioSource,
 
     bpm: i32 = 120,
     // was space pressed last frame?
     space_pressed: bool = false,
-    a_pressed: bool = false,
+    a_pressed: *bool,
 };
 
 export fn windowRescaleFn(window: *zglfw.Window, xscale: f32, yscale: f32) callconv(.C) void {
     zgui.getStyle().scaleAllSizes(@min(xscale, yscale) * window.getContentScale()[0]);
 }
+
+const Wobble = struct {
+    ctx: *const zounds.signals.AudioContext,
+    base_pitch: zounds.signals.Signal(f32) = .{ .static = 440.0 },
+    frequency: zounds.signals.Signal(f32) = .{ .static = 2.0 },
+    amp: zounds.signals.Signal(f32) = .{ .static = 10.0 },
+    phase: f32 = 0,
+
+    pub fn nextFn(ptr: *anyopaque) f32 {
+        var w: *Wobble = @ptrCast(@alignCast(ptr));
+
+        w.phase += std.math.tau * w.frequency.get() / @as(f32, @floatFromInt(w.ctx.sample_rate));
+
+        while (w.phase >= std.math.tau) {
+            w.phase -= std.math.tau;
+        }
+
+        return w.base_pitch.get() + w.amp.get() * std.math.sin(w.phase);
+    }
+
+    pub fn node(w: *Wobble) zounds.signals.Node(f32) {
+        return .{ .ptr = w, .nextFn = nextFn };
+    }
+};
 
 pub fn main() !void {
     _ = try zglfw.init();
@@ -90,25 +114,24 @@ pub fn main() !void {
 
     const config = zounds.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
 
-    const wave_iterator = try alloc.create(zounds.osc.WavetableIterator);
-    defer alloc.destroy(wave_iterator);
+    var pitch: f32 = 440.0;
+    var audio_ctx = zounds.signals.AudioContext{ .sample_rate = 44_100 };
 
-    var env_adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, false);
-
-    wave_iterator.* = .{
-        .wavetable = @constCast(&zounds.osc.bigWave),
-        .pitch = 1040.0,
-        .amp_generator = &env_adsr,
-        .sample_rate = 44_100,
+    var a_pressed = false;
+    const button: zounds.signals.Signal(bool) = .{ .ptr = &a_pressed };
+    var adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, button, false);
+    var wobble = Wobble{ .ctx = &audio_ctx, .base_pitch = .{ .ptr = &pitch } };
+    var signal_osc = zounds.signals.TestWavetableOscNode{
+        .ctx = &audio_ctx,
+        .pitch = wobble.node().signal(),
+        .amp = adsr.node().signal(),
     };
 
-    var sequence = try alloc.create(zounds.sources.SequenceSource);
-    defer alloc.destroy(sequence);
-    sequence.* = zounds.sources.SequenceSource.init(wave_iterator, 120);
+    audio_ctx.sink = signal_osc.node().signal();
 
-    var buffer_in = sequence.source();
+    var context_source = audio_ctx.source();
 
-    var bufferSource = try zounds.sources.BufferSource.init(alloc, &buffer_in);
+    var bufferSource = try zounds.sources.BufferSource.init(alloc, &context_source);
     defer bufferSource.deinit();
 
     const playerContext = try zounds.CoreAudioContext.init(alloc, config);
@@ -132,16 +155,16 @@ pub fn main() !void {
         .gctx = gctx,
         .player = player,
         .pitchNote = 76,
+        .pitch = &pitch,
         .vol = -20.0,
-        .wave_iterator = wave_iterator,
         .sound_buffer = bufferSource.buf,
         .window = window,
-        .sequence_source = sequence,
         .panther_source = panther_source,
         .panther_filter = @constCast(&panther_filter),
         .selected_source = .osc,
         .player_source = @constCast(&player_source),
-        .buffer_in = &buffer_in,
+        .audio_ctx = &audio_ctx,
+        .a_pressed = &a_pressed,
     };
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
@@ -172,19 +195,9 @@ fn update(app: *AppState) !void {
     }
 
     if (window.getKey(.a) == .press) {
-        if (!app.a_pressed) {
-            if (app.wave_iterator.amp_generator) |env| {
-                env.attack();
-            }
-        }
-        app.a_pressed = true;
+        app.a_pressed.* = true;
     } else {
-        if (app.a_pressed) {
-            if (app.wave_iterator.amp_generator) |env| {
-                env.release();
-            }
-        }
-        app.a_pressed = false;
+        app.a_pressed.* = false;
     }
 
     zgui.backend.newFrame(
@@ -221,10 +234,10 @@ fn update(app: *AppState) !void {
                     if (!selected) {
                         app.selected_source = curr_source;
                         const next_source = switch (curr_source) {
-                            .osc => app.sequence_source,
+                            .osc => app.audio_ctx,
                             .sample => app.panther_filter,
                         };
-                        app.buffer_in.* = next_source.source();
+                        _ = next_source; // TODO: fix reassigning source eventually
                     }
                 }
             }
@@ -243,17 +256,13 @@ fn update(app: *AppState) !void {
                     .max = 127,
                 })) {
                     // update pitch
-                    app.wave_iterator.setPitch(zounds.utils.pitchFromNote(app.pitchNote));
+                    app.pitch.* = zounds.utils.pitchFromNote(app.pitchNote);
                 }
 
-                if (zgui.sliderInt("Tick BPM", .{ .v = &app.bpm, .min = 20, .max = 300 })) {
-                    app.sequence_source.bpm = @intCast(app.bpm);
-                }
+                if (zgui.sliderInt("Tick BPM", .{ .v = &app.bpm, .min = 20, .max = 300 })) {}
 
                 if (zgui.button("Reset sequencer counter", .{})) {
                     std.debug.print("reset sequence\n", .{});
-                    app.sequence_source.note_index = 0;
-                    app.sequence_source.ticks = 0;
                 }
 
                 zgui.end();
