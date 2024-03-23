@@ -5,6 +5,7 @@ const main = @import("main.zig");
 const osc = @import("sources/osc.zig");
 const sources = @import("sources/main.zig");
 
+// TODO: rename to something else?
 pub const AudioContext = struct {
     sample_rate: u32,
     ticks: u64 = 0, // count of samples played

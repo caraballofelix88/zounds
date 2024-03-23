@@ -300,14 +300,28 @@ fn getPropertiesString(buf: []u8, ref: c.MIDIObjectRef) void {
     _ = c.CFWriteStreamClose(stream);
 }
 
+// TODO:?
+// GOAL: add available midi inputs as part of library context, allow selection between them
+// Sub-goal: build out abstraction layer for interfacing with midi stuff to keep platforms flexible
+const Midi = struct {
+    pub const Device = struct {};
+    pub const Client = struct {};
+    // specify input/output?
+    pub const Port = struct {};
+
+    // Get Available Midi Devices
+    pub fn getMidiDevices() void {}
+    // Create Midi Client on platforms
+    pub fn getMidiClient() void {}
+    // Connect MIDI client to a MIDI device
+    pub fn connectToDevice() void {}
+};
+
 pub fn initMidi() void {
     var client: c.MIDIClientRef = undefined;
     var port: c.MIDIPortRef = undefined;
 
     std.debug.print("Initializing midi:\n\n\n", .{});
-
-    const num_devices = c.MIDIGetNumberOfDevices();
-    std.debug.print("Number of devices:\t{}\n", .{num_devices});
 
     const num_ext_devices = c.MIDIGetNumberOfExternalDevices();
     std.debug.print("Number of external devices:\t{}\n", .{num_ext_devices});

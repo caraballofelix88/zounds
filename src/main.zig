@@ -61,6 +61,13 @@ pub const AudioBuffer = struct {
     }
 };
 
+// Context structure ideas:
+//
+// - desired audio output
+// - audio graph
+// - available midi device inputs
+// - current connected midi device input
+
 pub const Context = struct {
     pub const Config = struct {
         sample_format: SampleFormat,
