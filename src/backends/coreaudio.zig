@@ -1,11 +1,7 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("CoreFoundation/CoreFoundation.h");
-    @cInclude("CoreAudio/CoreAudio.h");
-    @cInclude("AudioUnit/AudioUnit.h");
-});
-
 const testing = std.testing;
+const c = @import("compat.zig");
+
 const main = @import("../main.zig");
 const sources = @import("../sources/main.zig");
 const osc = @import("../sources/osc.zig");
@@ -21,8 +17,6 @@ const DeviceState = enum {
 };
 
 const DeviceBackend = enum { core_audio };
-
-const default_sample_rate = 44_100; // 44.1khz
 
 // TODO: might not need to keep all these pointers, just rebuild the config components each time
 pub const Context = struct {
@@ -237,9 +231,6 @@ pub const Player = struct {
 
 };
 
-// TODO: Manage signal composition
-const Synth = struct {};
-
 const Error = error{ GenericError, InitializationError, PlaybackError };
 
 fn osStatusHandler(result: c.OSStatus) !void {
@@ -249,15 +240,123 @@ fn osStatusHandler(result: c.OSStatus) !void {
     }
 }
 
-var iterL = osc.SineIterator(0.5, 440.0, 44100){};
-var iterR = osc.SineIterator(0.5, 444.0, 44100){};
-var iterL2 = osc.SineIterator(0.5, 490.0, 44100){};
-
 test "basic check for leaks" {
     const alloc = std.testing.allocator;
 
-    const config = main.Context.Config{ .sample_format = f32, .sample_rate = default_sample_rate, .channel_count = 2, .frames_per_packet = 1 };
+    const config = main.Context.Config{ .sample_format = f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
     const playerContext = try Context.init(alloc, config);
 
     defer playerContext.deinit();
 }
+
+fn midiNotifyProc(notif: [*c]const c.MIDINotification, refCon: ?*anyopaque) callconv(.C) void {
+    _ = refCon;
+
+    // TODO: use c.kMIDImsg* to track incoming notifications
+    std.debug.print("MIDI notification received:\t{any}\n", .{notif.*});
+}
+
+// assumes single packet transmission for now. Will need refactoring to handle traversing packet list
+fn midiPacketReader(packets: [*c]const c.MIDIPacketList, ref_a: ?*anyopaque, ref_b: ?*anyopaque) callconv(.C) void {
+    _ = ref_a;
+    _ = ref_b;
+
+    // NOTE: MIDIPacket within packetlist needs to be pulled by memory address, not by array reference
+    const packet_bytes = std.mem.asBytes(packets);
+    const packet = std.mem.bytesToValue(c.MIDIPacket, packet_bytes[4..]);
+
+    std.debug.print("MIDI PacketList received:\t{}||\n", .{packet});
+
+    std.debug.print("\n", .{});
+}
+
+fn getStringRef(buf: []const u8) c.CFStringRef {
+    return c.CFStringCreateWithCStringNoCopy(
+        c.kCFAllocatorDefault,
+        @alignCast(buf.ptr),
+        c.kCFStringEncodingUTF8,
+        c.kCFAllocatorDefault,
+    );
+}
+
+fn getWriteStream(buf: []u8) c.CFWriteStreamRef {
+    return c.CFWriteStreamCreateWithBuffer(c.kCFAllocatorDefault, @alignCast(buf.ptr), @intCast(buf.len));
+}
+
+fn getPropertiesString(buf: []u8, ref: c.MIDIObjectRef) void {
+    var object_plist: c.CFPropertyListRef = undefined;
+
+    osStatusHandler(c.MIDIObjectGetProperties(ref, &object_plist, 0)) catch |err| {
+        std.debug.print("Error pulling MIDI object properties:\t{}\n", .{err});
+    };
+
+    const stream: c.CFWriteStreamRef = getWriteStream(buf);
+
+    _ = c.CFWriteStreamOpen(stream);
+
+    const bytes_written = c.CFPropertyListWrite(object_plist, stream, c.kCFPropertyListXMLFormat_v1_0, 0, null);
+    std.debug.assert(bytes_written != 0);
+
+    _ = c.CFWriteStreamClose(stream);
+}
+
+pub fn initMidi() void {
+    var client: c.MIDIClientRef = undefined;
+    var port: c.MIDIPortRef = undefined;
+
+    std.debug.print("Initializing midi:\n\n\n", .{});
+
+    const num_devices = c.MIDIGetNumberOfDevices();
+    std.debug.print("Number of devices:\t{}\n", .{num_devices});
+
+    const num_ext_devices = c.MIDIGetNumberOfExternalDevices();
+    std.debug.print("Number of external devices:\t{}\n", .{num_ext_devices});
+
+    const device: c.MIDIDeviceRef = c.MIDIGetDevice(3);
+
+    var properties_buf: [2048]u8 = undefined;
+    getPropertiesString(&properties_buf, device);
+    std.debug.print("Midi Device 0 details\t:\n{s}\n", .{properties_buf});
+
+    const entity_count: c.ItemCount = c.MIDIDeviceGetNumberOfEntities(device);
+    std.debug.print("Device Entity Count:\t{}\n", .{entity_count});
+
+    const entity: c.MIDIEntityRef = c.MIDIDeviceGetEntity(device, 0);
+
+    properties_buf = std.mem.zeroes([2048]u8);
+    getPropertiesString(&properties_buf, entity);
+    std.debug.print("MIDI Entity Details:\t\n{s}\n", .{properties_buf});
+
+    const source: c.MIDIEndpointRef = c.MIDIEntityGetSource(entity, 0);
+    std.debug.print("source count:\t{}\n", .{c.MIDIEntityGetNumberOfSources(entity)});
+
+    properties_buf = std.mem.zeroes([2048]u8);
+    getPropertiesString(&properties_buf, source);
+    std.debug.print("source:\n{s}\n", .{properties_buf});
+
+    const receiver_name = getStringRef("Packet Receiver");
+    // TODO: update MIDINotifyProc to track updates to midi devices
+    osStatusHandler(c.MIDIClientCreate(receiver_name, &midiNotifyProc, null, &client)) catch |err| {
+        std.debug.print("Error creating midi client:\t{}\n", .{err});
+    };
+
+    const port_name = getStringRef("MIDI Input Port for Zounds");
+    // InputPortCreate + MIDIReadProc should be deprecated in favor of MIDIInputPortCreateWithProtocol + midiReceiveBlock
+    // zig C header translation doesn't yet support C block nodes, so it is what it is for now
+    osStatusHandler(c.MIDIInputPortCreate(client, port_name, &midiPacketReader, null, &port)) catch |err| {
+        std.debug.print("Error creating midi client:\t{}\n", .{err});
+    };
+
+    _ = osStatusHandler(c.MIDIPortConnectSource(port, source, null)) catch |err| {
+        std.debug.print("Error connecting port to source:\t{}\n", .{err});
+    };
+}
+
+test "getStringRef" {
+    const test_str = "Testing";
+
+    const out: c.CFStringRef = getStringRef(test_str);
+    _ = out;
+}
+
+test "Midi" {}

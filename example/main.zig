@@ -61,6 +61,8 @@ export fn windowRescaleFn(window: *zglfw.Window, xscale: f32, yscale: f32) callc
     zgui.getStyle().scaleAllSizes(@min(xscale, yscale) * window.getContentScale()[0]);
 }
 
+// simple LFO
+// TODO: move
 const Wobble = struct {
     ctx: *const zounds.signals.AudioContext,
     base_pitch: zounds.signals.Signal(f32) = .{ .static = 440.0 },
@@ -166,6 +168,8 @@ pub fn main() !void {
         .audio_ctx = &audio_ctx,
         .a_pressed = &a_pressed,
     };
+
+    zounds.coreaudio.initMidi();
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
         zglfw.pollEvents();

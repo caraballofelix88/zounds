@@ -79,6 +79,7 @@ pub fn link(target: std.Build.ResolvedTarget, step: *std.Build.Step.Compile) voi
             step.linkFramework("CoreFoundation");
             step.linkFramework("CoreAudio");
             step.linkFramework("AudioToolbox");
+            step.linkFramework("CoreMidi");
         },
         else => {},
     }
