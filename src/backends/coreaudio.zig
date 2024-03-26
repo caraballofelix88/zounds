@@ -6,6 +6,7 @@ const main = @import("../main.zig");
 const sources = @import("../sources/main.zig");
 const osc = @import("../sources/osc.zig");
 const utils = @import("../utils.zig");
+const midi = @import("../midi.zig");
 // shoutouts to my mans jamal for planting the seeds -- https://gist.github.com/jamal/8ee096ca98759f83b4942f22d365d449
 
 const DeviceState = enum {
@@ -265,7 +266,8 @@ fn midiPacketReader(packets: [*c]const c.MIDIPacketList, ref_a: ?*anyopaque, ref
     const packet_bytes = std.mem.asBytes(packets);
     const packet = std.mem.bytesToValue(c.MIDIPacket, packet_bytes[4..]);
 
-    std.debug.print("MIDI PacketList received:\t{}||\n", .{packet});
+    const msg = try midi.Message.fromBytes(packet.data[0..packet.length], null);
+    std.debug.print("MIDI Message:\t{}, channel:{}, {x}\n", .{ msg.status.kind(), msg.status.channel(), msg.data });
 
     std.debug.print("\n", .{});
 }
