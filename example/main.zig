@@ -169,7 +169,9 @@ pub fn main() !void {
         .a_pressed = &a_pressed,
     };
 
-    zounds.coreaudio.initMidi();
+    var midi_client = try zounds.coreaudio.Midi.Client.init(alloc);
+    midi_client.connectInput(2);
+    defer midi_client.deinit();
 
     while (!window.shouldClose() and window.getKey(.escape) != .press) {
         zglfw.pollEvents();

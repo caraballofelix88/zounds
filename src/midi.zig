@@ -1,4 +1,5 @@
 const std = @import("std");
+const signals = @import("signals.zig");
 const testing = std.testing;
 
 // amazing reference for MIDI spec: http://www.somascape.org/midi/tech/spec.html
@@ -80,7 +81,7 @@ test "Status" {
 }
 
 // TODO: sysex won't work w this data structure
-pub const Message = packed struct {
+pub const Message = struct {
     status: Status,
     data: u16 = undefined, // pair of 7-bit values packed together
     pub fn fromBytes(data: []const u8, prev_status: ?Status) !Message {
