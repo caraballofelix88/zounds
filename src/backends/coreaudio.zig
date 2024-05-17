@@ -263,20 +263,35 @@ fn midiNotifyProc(notif: [*c]const c.MIDINotification, refCon: ?*anyopaque) call
     _ = refCon;
 
     // TODO: use c.kMIDImsg* to track incoming notifications
+    // /Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk/System/Library/Frameworks/CoreMIDI.framework/Versions/A/Headers/MIDIServices.h:683
     std.debug.print("MIDI notification received:\t{any}\n", .{notif.*});
 }
 
 // assumes single packet transmission for now. Will need refactoring to handle traversing packet list
-fn midiPacketReader(packets: [*c]const c.MIDIPacketList, ref_a: ?*anyopaque, ref_b: ?*anyopaque) callconv(.C) void {
-    _ = ref_a;
-    _ = ref_b;
+// Follows MIDIReadProc signature: /Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk/System/Library/Frameworks/CoreMIDI.framework/Versions/A/Headers/MIDIServices.h:366
+// TODO: NEXT: Provide callback to do work on received messages
+fn midiPacketReader(packets: [*c]const c.MIDIPacketList, read_proc_ref: ?*anyopaque, source_connect_ref: ?*anyopaque) callconv(.C) void {
+    _ = source_connect_ref;
+
+    std.debug.print("hello\n\n\n\n", .{});
+
+    const cb_struct: *Midi.ClientCallbackStruct = @ptrCast(@alignCast(read_proc_ref));
+    const cb: *fn (*const midi.Message, *anyopaque) void = @ptrCast(@constCast(@alignCast(cb_struct.cb)));
 
     // NOTE: MIDIPacket within packet list needs to be pulled by memory address, not by array reference
     const packet_bytes = std.mem.asBytes(packets);
     const packet = std.mem.bytesToValue(c.MIDIPacket, packet_bytes[4..]);
 
-    const msg = try midi.Message.fromBytes(packet.data[0..packet.length], null);
+    const msg: midi.Message = midi.Message.fromBytes(packet.data[0..packet.length], null) catch |err| {
+        std.debug.panic("message parse failure:\t{}\n", .{err});
+    };
     std.debug.print("MIDI Message:\t{}, channel:{}, {x}\n\n", .{ msg.status.kind(), msg.status.channel(), msg.data });
+
+    std.Thread.Mutex.lock(cb_struct.mut);
+    defer std.Thread.Mutex.unlock(cb_struct.mut);
+
+    // not entirely sure why msg needs to be passed as a ref for this to work. Otherwise, param comes through as garbage. Is there some weird ambiguity around passing structs by value?
+    cb(&msg, cb_struct.ref.?);
 }
 
 fn getStringRef(buf: []const u8) c.CFStringRef {
@@ -306,11 +321,9 @@ fn getStringProperty(buf: []u8, obj_ref: c.MIDIObjectRef, property_key: []const 
 
     _ = c.CFStringGetCString(property_ref, @alignCast(buf.ptr), @intCast(buf.len), c.kCFStringEncodingUTF8);
 
-    std.debug.print("String Property: {s}:\n|{s}|\n", .{ property_key, buf });
+    //std.debug.print("String Property: {s}:\n|{s}|\n", .{ property_key, buf });
     return std.mem.trimRight(u8, buf, "\xaa");
 }
-
-const PropertyType = enum { str, int };
 
 fn getIntegerProperty(val: *i32, obj_ref: c.MIDIObjectRef, property_key: []const u8) void {
     const key_ref = getStringRef(property_key);
@@ -323,7 +336,7 @@ fn getIntegerProperty(val: *i32, obj_ref: c.MIDIObjectRef, property_key: []const
 fn getPropertiesString(buf: []u8, ref: c.MIDIObjectRef) void {
     var object_plist: c.CFPropertyListRef = undefined;
 
-    const DEEP = 1;
+    const DEEP = 1; // DEEP = 1 gets nested properties
     osStatusHandler(c.MIDIObjectGetProperties(ref, &object_plist, DEEP)) catch |err| {
         std.debug.print("Error pulling MIDI object properties:\t{}\n", .{err});
     };
@@ -373,7 +386,7 @@ pub const Midi = struct {
         name: []const u8,
         id: i32,
         entity: ?Entity = null,
-        is_input: bool = false, // TODO: cmon lol
+        is_input: bool = false, // good enough!
 
         pub fn init(
             alloc: std.mem.Allocator,
@@ -382,14 +395,21 @@ pub const Midi = struct {
             is_input: bool,
             entity: ?Entity,
         ) !Endpoint {
+            // copy strings over
             const _name = try alloc.dupe(u8, name);
+
+            var _entity: ?Entity = null;
+            if (entity) |e| {
+                const entity_name = try alloc.dupe(u8, e.name);
+                _entity = .{ .name = entity_name, .id = e.id, .is_embedded = e.is_embedded };
+            }
 
             return .{
                 .alloc = alloc,
                 .name = _name,
                 .id = id,
                 .is_input = is_input,
-                .entity = entity,
+                .entity = _entity,
             };
         }
 
@@ -409,6 +429,8 @@ pub const Midi = struct {
         }
     };
 
+    pub const ClientCallbackStruct = struct { ref: ?*anyopaque, cb: *const fn (*const midi.Message, *anyopaque) callconv(.C) void, mut: *std.Thread.Mutex };
+
     // Limiting to single input source for now
     pub const Client = struct {
         alloc: std.mem.Allocator,
@@ -427,7 +449,7 @@ pub const Midi = struct {
         active_input: u8 = undefined,
         active_output: u8 = undefined,
 
-        pub fn init(alloc: std.mem.Allocator) !Client {
+        pub fn init(alloc: std.mem.Allocator, cb_struct: *const ClientCallbackStruct) !Client {
             const name = try alloc.dupe(u8, &"Test".*);
             const id = 12345;
 
@@ -436,7 +458,7 @@ pub const Midi = struct {
 
             const num_sources = c.MIDIGetNumberOfSources();
 
-            // ignore destinations for now
+            // TODO: ignore potential outputs for now
             const num_destinations = c.MIDIGetNumberOfDestinations();
             _ = num_destinations;
 
@@ -448,8 +470,8 @@ pub const Midi = struct {
             const port_name = getStringRef("MIDI Input Port for Zounds"); // TODO: name designated here isn't reflected in other applications, wonder what's up w that
             // InputPortCreate + MIDIReadProc should be deprecated in favor of MIDIInputPortCreateWithProtocol + midiReceiveBlock
             // zig C header translation doesn't yet support C block nodes, so it is what it is for now
-            osStatusHandler(c.MIDIInputPortCreate(ref, port_name, &midiPacketReader, null, &port_ref)) catch |err| {
-                std.debug.print("Error creating midi client:\t{}\n", .{err});
+            osStatusHandler(c.MIDIInputPortCreate(ref, port_name, &midiPacketReader, @ptrCast(@constCast(cb_struct)), &port_ref)) catch |err| {
+                std.debug.print("Error creating midi client input port:\t{}\n", .{err});
             };
 
             for (0..num_sources) |n| {
@@ -492,10 +514,12 @@ pub const Midi = struct {
             client.alloc.free(client.name);
         }
 
-        pub fn connectInput(client: *Client, index: u8) void {
-            if (client.active_input == index) {
-                return;
-            }
+        // TODO: provide callback to connected port
+        pub fn connectInputSource(client: *Client, index: u8) void {
+            // if (client.active_input == index) {
+            //     std.debug.print("Already connected to input source {}.\n", .{index});
+            //     return;
+            // }
 
             var source: c.MIDIEndpointRef = undefined;
 
@@ -506,6 +530,9 @@ pub const Midi = struct {
                 std.debug.print("Error connecting port to source:\t{}\n", .{err});
             };
 
+            var name_buf: [64]u8 = undefined;
+            const name = getStringProperty(@constCast(&name_buf), source, "name");
+            std.debug.print("Connected input {}:\t{}, {s}\n", .{ index, source_id, name });
             client.active_input = index;
         }
     };
@@ -575,6 +602,7 @@ pub const Midi = struct {
     }
 
     // Create Midi Client on platforms
+    // TODO: add notification callback
     fn createMidiClient() u32 {
         var ref: c.MIDIClientRef = undefined;
         const receiver_name = getStringRef("Zounds Midi Client");

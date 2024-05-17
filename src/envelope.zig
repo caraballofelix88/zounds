@@ -59,7 +59,7 @@ test "Duration" {
     try testing.expectEqual(samples.in_seconds(sample_rate), 1.0);
 }
 
-const Ramp = struct {
+pub const Ramp = struct {
     from: f32,
     to: f32,
     duration: Duration,
@@ -209,13 +209,11 @@ pub const Envelope = struct {
 
         if (e.trigger.get()) {
             if (!e.prev_trigger_state) {
-                std.debug.print("attack attack\n", .{});
                 e.attack();
             }
             e.prev_trigger_state = true;
         } else {
             if (e.prev_trigger_state) {
-                std.debug.print("release release\n", .{});
                 e.release();
                 e.prev_trigger_state = false;
             }
@@ -232,7 +230,6 @@ pub const Envelope = struct {
 
         // handle reaching end of current ramp
         if (e.sample_index >= e.curr_ramp.duration_samples()) {
-            std.debug.print("Increment ramp: {}\n", .{e.ramp_index});
             e.ramp_index += 1;
 
             if (e.hasNext()) {

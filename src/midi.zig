@@ -81,6 +81,7 @@ test "Status" {
 }
 
 // TODO: sysex won't work w this data structure
+// TODO: provide way to get data value
 pub const Message = struct {
     status: Status,
     data: u16 = undefined, // pair of 7-bit values packed together
@@ -127,6 +128,7 @@ test "Message" {
     try testing.expectEqual(.note_on, msg.status.kind());
     try testing.expectEqual(msg.data, 0x4329);
 
+    // Test abbreviated "running" notes
     const running_status = msg.status;
     const running_msg = try Message.fromBytes(&.{ 0x44, 0x29 }, running_status);
     try testing.expectEqual(.note_on, running_msg.status.kind());
