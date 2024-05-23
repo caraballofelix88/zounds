@@ -36,6 +36,7 @@ pub fn main() !void {
     var trigger: bool = false;
     const trigger_sig: zounds.signals.Signal(bool) = .{ .ptr = &trigger };
 
+    // TODO: ADSR utility function for quickly generating 4-tuple ramp list
     const adsr: [4]zounds.envelope.Ramp = .{
         .{ // attack
             .from = 0.0,

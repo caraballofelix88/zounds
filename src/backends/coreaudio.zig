@@ -26,7 +26,7 @@ pub const Context = struct {
     asbd: *c.AudioStreamBasicDescription,
     device: *c.AudioComponent,
     audioUnit: *c.AudioUnit,
-    devices: []main.Device, // TODO: list available devices
+    devices: []main.Device,
 
     const Self = @This();
 
@@ -37,7 +37,7 @@ pub const Context = struct {
             .componentType = c.kAudioUnitType_Output,
             .componentSubType = c.kAudioUnitSubType_DefaultOutput,
             .componentManufacturer = c.kAudioUnitManufacturer_Apple,
-            .componentFlags = std.mem.zeroes(u32), //TODO: what are these?
+            .componentFlags = std.mem.zeroes(u32),
             .componentFlagsMask = std.mem.zeroes(u32),
         };
 
@@ -269,11 +269,8 @@ fn midiNotifyProc(notif: [*c]const c.MIDINotification, refCon: ?*anyopaque) call
 
 // assumes single packet transmission for now. Will need refactoring to handle traversing packet list
 // Follows MIDIReadProc signature: /Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk/System/Library/Frameworks/CoreMIDI.framework/Versions/A/Headers/MIDIServices.h:366
-// TODO: NEXT: Provide callback to do work on received messages
 fn midiPacketReader(packets: [*c]const c.MIDIPacketList, read_proc_ref: ?*anyopaque, source_connect_ref: ?*anyopaque) callconv(.C) void {
     _ = source_connect_ref;
-
-    std.debug.print("hello\n\n\n\n", .{});
 
     const cb_struct: *Midi.ClientCallbackStruct = @ptrCast(@alignCast(read_proc_ref));
     const cb: *fn (*const midi.Message, *anyopaque) void = @ptrCast(@constCast(@alignCast(cb_struct.cb)));
@@ -467,7 +464,8 @@ pub const Midi = struct {
 
             // initialize client input port
             var port_ref: c.MIDIPortRef = undefined;
-            const port_name = getStringRef("MIDI Input Port for Zounds"); // TODO: name designated here isn't reflected in other applications, wonder what's up w that
+            // TODO: name designated here isn't reflected in other applications, wonder what's up w that<D-s>
+            const port_name = getStringRef("MIDI Input Port for Zounds");
             // InputPortCreate + MIDIReadProc should be deprecated in favor of MIDIInputPortCreateWithProtocol + midiReceiveBlock
             // zig C header translation doesn't yet support C block nodes, so it is what it is for now
             osStatusHandler(c.MIDIInputPortCreate(ref, port_name, &midiPacketReader, @ptrCast(@constCast(cb_struct)), &port_ref)) catch |err| {
@@ -602,11 +600,10 @@ pub const Midi = struct {
     }
 
     // Create Midi Client on platforms
-    // TODO: add notification callback
     fn createMidiClient() u32 {
         var ref: c.MIDIClientRef = undefined;
         const receiver_name = getStringRef("Zounds Midi Client");
-        // TODO: update MIDINotifyProc to track updates to midi devices
+        // TODO: update MIDINotifyProc to track updates to available midi devices
         osStatusHandler(c.MIDIClientCreate(receiver_name, &midiNotifyProc, null, &ref)) catch |err| {
             std.debug.print("Error creating midi client:\t{}\n", .{err});
         };

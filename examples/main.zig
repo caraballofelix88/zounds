@@ -1,34 +1,11 @@
 const std = @import("std");
 const zounds = @import("zounds");
 
-const AppState = struct {
-    alloc: std.mem.Allocator,
-    player: *zounds.Player,
-    sound_buffer: *std.RingBuffer,
-
-    // player config
-    vol: f32,
-
-    // audio source config
-    pitchNote: i32,
-
-    pitch: *f32,
-
-    audio_ctx: *zounds.signals.AudioContext,
-
-    filter_cutoff_hz: i32 = 1000,
-    selected_filter: zounds.filters.FilterType = .low_pass,
-
-    player_source: *zounds.sources.AudioSource,
-
-    bpm: i32 = 120,
-};
-
 // simple LFO
 const Wobble = struct {
     ctx: *const zounds.signals.AudioContext,
     base_pitch: zounds.signals.Signal(f32) = .{ .static = 440.0 },
-    frequency: zounds.signals.Signal(f32) = .{ .static = 20.0 },
+    frequency: zounds.signals.Signal(f32) = .{ .static = 10.0 },
     amp: zounds.signals.Signal(f32) = .{ .static = 10.0 },
     phase: f32 = 0,
 
@@ -56,8 +33,6 @@ pub fn main() !void {
 
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
-    _ = stdout;
-    _ = stdin;
 
     const config = zounds.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
 
@@ -88,33 +63,42 @@ pub fn main() !void {
     const player = try playerContext.createPlayer(@constCast(&player_source));
     _ = try player.setVolume(-20.0);
 
-    const state = try alloc.create(AppState);
-    defer alloc.destroy(state);
-
-    state.* = .{
-        .alloc = alloc,
-        .player = player,
-        .pitchNote = 76,
-        .pitch = &pitch,
-        .vol = -20.0,
-        .sound_buffer = bufferSource.buf,
-        .player_source = @constCast(&player_source),
-        .audio_ctx = &audio_ctx,
-    };
-
     var queue: std.fifo.LinearFifo(zounds.midi.Message, .Dynamic) = std.fifo.LinearFifo(zounds.midi.Message, .Dynamic).init(alloc);
     var mutex = std.Thread.Mutex{};
     const on_update_struct = zounds.coreaudio.Midi.ClientCallbackStruct{ .cb = &midiCallback, .ref = @ptrCast(@constCast(&queue)), .mut = &mutex };
 
     var midi_client = try zounds.coreaudio.Midi.Client.init(alloc, &on_update_struct);
 
-    midi_client.connectInputSource(1);
     defer midi_client.deinit();
 
-    state.player.play();
+    player.play();
+
+    var input_buffer: [25]u8 = undefined;
+    var selected_option: u8 = 0;
+
+    while (selected_option == 0) {
+        try stdout.print("Select MIDI input from available options: \n", .{});
+
+        for (midi_client.available_inputs.items, 0..) |input, idx| {
+            try stdout.print("{}:\t{s}\n", .{ idx + 1, input.name });
+        }
+
+        try stdout.print("\n\nSelected Option: ", .{});
+
+        const input = try stdin.readUntilDelimiter(&input_buffer, '\n');
+        selected_option = try std.fmt.parseInt(u8, @ptrCast(input), 10);
+
+        if (selected_option > midi_client.available_inputs.items.len or selected_option < 0) {
+            try stdout.print("Invalid entry. Select from available options.\n\n", .{});
+            selected_option = 0;
+        } else {
+            try stdout.print("Nice, connecting to {s}....\n\n", .{midi_client.available_inputs.items[selected_option - 1].name});
+        }
+    }
+
+    midi_client.connectInputSource(selected_option - 1);
 
     var should_stop = false;
-
     while (!should_stop) {
         std.time.sleep(std.time.ns_per_ms * 16);
 
@@ -123,21 +107,19 @@ pub fn main() !void {
 
         while (queue.readItem()) |msg| {
             std.debug.print("Reading msg in main thread:\t{}\n", .{msg});
-            if (msg.status.kind() == .note_on and msg.data & 0xFF00 == 0x4700) {
+            if (msg.status.kind() == .note_on and msg.data & 0xFF00 == 0x2c00) {
                 should_stop = true;
             }
         }
     }
 
-    state.player.pause();
+    player.pause();
 }
 
 fn midiCallback(sent_msg: *const zounds.midi.Message, queue_ptr: *anyopaque) callconv(.C) void {
     var queue: *std.fifo.LinearFifo(zounds.midi.Message, .Dynamic) = @ptrCast(@constCast(@alignCast(queue_ptr)));
 
     _ = queue.writeItem(sent_msg.*) catch |err| {
-        std.debug.print("Callback queue append error:\t{}\n", .{err});
+        std.debug.print("Midi message queue append error:\t{}\n", .{err});
     };
-
-    std.debug.print("Confirming we're writing:\nnumber of elems:{}\tpeeked elem:{}\n\n", .{ queue.readableLength(), queue.peekItem(queue.readableLength() - 1) });
 }

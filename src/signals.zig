@@ -49,6 +49,7 @@ pub const AudioContext = struct {
 
 const wave = osc.Wavetable(1024, .sine);
 
+// TODO: rename
 pub const TestWavetableOscNode = struct {
     ctx: *const AudioContext,
     wavetable: []const f32 = &wave,

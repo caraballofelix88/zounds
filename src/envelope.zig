@@ -185,6 +185,7 @@ pub const adsr: [4]Ramp = .{
 };
 
 // TODO: create a method to start at some arbitrary point anywhere within envelope duration? Using context?
+// TODO: NEXT: how do we make stateless, for reuse across multiple oscillators or MIDI voices?
 // TODO: rename to ADSR
 pub const Envelope = struct {
     ramps: []const Ramp,
