@@ -101,7 +101,7 @@ pub const Ramp = struct {
 };
 
 test "Ramp" {
-    const args: Ramp = .{
+    var args: Ramp = .{
         .from = 1.0,
         .to = 10.0,
         .ramp_type = .linear,

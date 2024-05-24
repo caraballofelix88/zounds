@@ -253,7 +253,7 @@ fn osStatusHandler(result: c.OSStatus) !void {
 test "basic check for leaks" {
     const alloc = std.testing.allocator;
 
-    const config = main.Context.Config{ .sample_format = f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
+    const config = main.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
     const playerContext = try Context.init(alloc, config);
 
     defer playerContext.deinit();
@@ -426,6 +426,7 @@ pub const Midi = struct {
         }
     };
 
+    // TODO: rename to clarify use as midi message capture callback
     pub const ClientCallbackStruct = struct { ref: ?*anyopaque, cb: *const fn (*const midi.Message, *anyopaque) callconv(.C) void, mut: *std.Thread.Mutex };
 
     // Limiting to single input source for now
@@ -446,7 +447,7 @@ pub const Midi = struct {
         active_input: u8 = undefined,
         active_output: u8 = undefined,
 
-        pub fn init(alloc: std.mem.Allocator, cb_struct: *const ClientCallbackStruct) !Client {
+        pub fn init(alloc: std.mem.Allocator, cb_struct: ?*const ClientCallbackStruct) !Client {
             const name = try alloc.dupe(u8, &"Test".*);
             const id = 12345;
 
@@ -468,7 +469,7 @@ pub const Midi = struct {
             const port_name = getStringRef("MIDI Input Port for Zounds");
             // InputPortCreate + MIDIReadProc should be deprecated in favor of MIDIInputPortCreateWithProtocol + midiReceiveBlock
             // zig C header translation doesn't yet support C block nodes, so it is what it is for now
-            osStatusHandler(c.MIDIInputPortCreate(ref, port_name, &midiPacketReader, @ptrCast(@constCast(cb_struct)), &port_ref)) catch |err| {
+            osStatusHandler(c.MIDIInputPortCreate(ref, port_name, &midiPacketReader, @ptrCast(@constCast(cb_struct orelse null)), &port_ref)) catch |err| {
                 std.debug.print("Error creating midi client input port:\t{}\n", .{err});
             };
 
@@ -614,7 +615,7 @@ pub const Midi = struct {
 test "Client init" {
     const alloc = testing.allocator_instance.allocator();
 
-    var client = try Midi.Client.init(alloc);
+    var client = try Midi.Client.init(alloc, null);
     defer client.deinit();
 }
 

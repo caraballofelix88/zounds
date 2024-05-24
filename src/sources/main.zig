@@ -183,7 +183,7 @@ pub const SequenceSource = struct {
         s.ticks += 1;
 
         const curr_note = s.notes[s.note_index];
-        const tick_interval: u32 = @intFromFloat(curr_note.duration.sampleInterval(44_100, s.bpm));
+        const tick_interval: u32 = curr_note.duration.sampleInterval(44_100, s.bpm);
 
         if (s.ticks >= tick_interval) {
             s.note_index += 1;
