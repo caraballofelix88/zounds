@@ -20,22 +20,19 @@ const DeviceState = enum {
 // TODO: separate backend stuff from coreaudio implementation
 const DeviceBackend = enum { core_audio };
 
-// TODO: might not need to keep all these pointers, just rebuild the config components each time
 // TODO: Rework device context
 pub const Context = struct {
     alloc: std.mem.Allocator,
-    acd: *c.AudioComponentDescription,
-    asbd: *c.AudioStreamBasicDescription,
-    device: *c.AudioComponent,
-    audioUnit: *c.AudioUnit,
+    acd: c.AudioComponentDescription,
+    asbd: c.AudioStreamBasicDescription,
+    device: c.AudioComponent,
+    audioUnit: c.AudioUnit,
     devices: []main.Device,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, config: main.Context.Config) !Self {
-        const acd = try allocator.create(c.AudioComponentDescription);
-
-        acd.* = c.AudioComponentDescription{
+        var acd = c.AudioComponentDescription{
             .componentType = c.kAudioUnitType_Output,
             .componentSubType = c.kAudioUnitSubType_DefaultOutput,
             .componentManufacturer = c.kAudioUnitManufacturer_Apple,
@@ -44,22 +41,20 @@ pub const Context = struct {
         };
 
         // get next available audio component
-        const device = try allocator.create(c.AudioComponent);
-        device.* = c.AudioComponentFindNext(null, acd) orelse {
+        var device: c.AudioComponent = undefined;
+        device = c.AudioComponentFindNext(null, &acd) orelse {
             std.debug.panic("error finding device \n", .{});
         };
 
         // capture audio unit instance for device
-        const audioUnit = try allocator.create(c.AudioUnit);
-        osStatusHandler(c.AudioComponentInstanceNew(device.*, audioUnit)) catch |err| {
+        var audioUnit: c.AudioUnit = undefined;
+        osStatusHandler(c.AudioComponentInstanceNew(device, &audioUnit)) catch |err| {
             std.debug.panic("audio component instance failed: {}\n", .{err});
         };
 
-        const asbd = try allocator.create(c.AudioStreamBasicDescription);
-
-        // get audiounit stream description
         const bytesPerFrame = config.sample_format.size() * config.channel_count;
-        asbd.* = c.AudioStreamBasicDescription{
+
+        const asbd = c.AudioStreamBasicDescription{
             .mFormatID = c.kAudioFormatLinearPCM,
             // TODO: update audio format flags based on config.sample_format, or just force convert into f32
             .mFormatFlags = 0 | c.kAudioFormatFlagIsFloat,
@@ -72,7 +67,7 @@ pub const Context = struct {
             .mReserved = 0,
         };
 
-        osStatusHandler(c.AudioUnitSetProperty(audioUnit.*, c.kAudioUnitProperty_StreamFormat, c.kAudioUnitScope_Input, 0, asbd, @sizeOf(@TypeOf(asbd.*)))) catch |err| {
+        osStatusHandler(c.AudioUnitSetProperty(audioUnit, c.kAudioUnitProperty_StreamFormat, c.kAudioUnitScope_Input, 0, &asbd, @sizeOf(@TypeOf(asbd)))) catch |err| {
             std.debug.panic("failed to stream format: {}\n", .{err});
         };
 
@@ -81,16 +76,11 @@ pub const Context = struct {
 
     pub fn deinit(self: Self) void {
         // stop audioUnit
-        _ = c.AudioOutputUnitStop(self.audioUnit.*);
-        _ = c.AudioUnitUninitialize(self.audioUnit.*);
+        _ = c.AudioOutputUnitStop(self.audioUnit);
+        _ = c.AudioUnitUninitialize(self.audioUnit);
 
         // dispose of instance
-        _ = c.AudioComponentInstanceDispose(self.audioUnit.*);
-
-        self.alloc.destroy(self.audioUnit);
-        self.alloc.destroy(self.acd);
-        self.alloc.destroy(self.asbd);
-        self.alloc.destroy(self.device);
+        _ = c.AudioComponentInstanceDispose(self.audioUnit);
     }
 
     pub fn renderCallback(refPtr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.C) c.OSStatus {
@@ -127,7 +117,13 @@ pub const Context = struct {
     pub fn createPlayer(self: Self, source: *sources.AudioSource) !*Player {
         const player = try self.alloc.create(Player);
 
-        player.* = Player{ .alloc = self.alloc, .audio_unit = self.audioUnit, .is_playing = false, .ctx = &self, .source = source };
+        player.* = Player{
+            .alloc = self.alloc,
+            .audio_unit = self.audioUnit,
+            .is_playing = false,
+            .ctx = &self,
+            .source = source,
+        };
 
         const input = try self.alloc.create(c.AURenderCallbackStruct);
         defer self.alloc.destroy(input);
@@ -137,12 +133,12 @@ pub const Context = struct {
             .inputProcRefCon = player,
         };
 
-        osStatusHandler(c.AudioUnitSetProperty(self.audioUnit.*, c.kAudioUnitProperty_SetRenderCallback, c.kAudioUnitScope_Input, 0, input, @sizeOf(@TypeOf(input.*)))) catch |err| {
+        osStatusHandler(c.AudioUnitSetProperty(self.audioUnit, c.kAudioUnitProperty_SetRenderCallback, c.kAudioUnitScope_Input, 0, input, @sizeOf(@TypeOf(input.*)))) catch |err| {
             std.debug.panic("failed to set render callback: {}\n", .{err});
         };
 
         // initialize player
-        osStatusHandler(c.AudioUnitInitialize(player.audio_unit.*)) catch |err| {
+        osStatusHandler(c.AudioUnitInitialize(player.audio_unit)) catch |err| {
             std.debug.panic("failed to initialize: {}\n", .{err});
         };
 
@@ -163,7 +159,7 @@ fn freeDevice(device: main.Device) void {
 // Controls audio context and interfaces playback actions
 pub const Player = struct {
     alloc: std.mem.Allocator,
-    audio_unit: *c.AudioUnit,
+    audio_unit: c.AudioUnit,
     ctx: *const Context,
     volume: f32 = 0.5, // useless for now
     is_playing: bool,
@@ -172,7 +168,7 @@ pub const Player = struct {
     fn init() void {}
 
     pub fn play(p: *Player) void {
-        osStatusHandler(c.AudioOutputUnitStart(p.audio_unit.*)) catch |err| {
+        osStatusHandler(c.AudioOutputUnitStart(p.audio_unit)) catch |err| {
             std.debug.print("uh oh, playing didn't work: {}\n", .{err});
         };
 
@@ -180,7 +176,7 @@ pub const Player = struct {
     }
 
     pub fn pause(p: *Player) void {
-        osStatusHandler(c.AudioOutputUnitStop(p.audio_unit.*)) catch |err| {
+        osStatusHandler(c.AudioOutputUnitStop(p.audio_unit)) catch |err| {
             std.debug.print("uh oh, playing didn't work: {}\n", .{err});
         };
 
@@ -191,7 +187,7 @@ pub const Player = struct {
         const amplitude = utils.decibelsToAmplitude(vol);
 
         osStatusHandler(c.AudioUnitSetParameter(
-            p.audio_unit.*,
+            p.audio_unit,
             c.kHALOutputParam_Volume,
             c.kAudioUnitScope_Global,
             0,
@@ -205,7 +201,7 @@ pub const Player = struct {
     pub fn volume(p: *Player) !f32 {
         var vol: f32 = 0;
         osStatusHandler(c.AudioUnitGetParameter(
-            p.audio_unit.*,
+            p.audio_unit,
             c.kHALOutputParam_Volume,
             c.kAudioUnitScope_Global,
             0,

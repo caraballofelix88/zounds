@@ -9,9 +9,18 @@ pub fn build(b: *std.Build) void {
 
     const mod = b.addModule("zounds", .{ .root_source_file = .{ .path = "src/main.zig" } });
 
+    const example_name = b.option(
+        []const u8,
+        "example_name",
+        "Name of example executable",
+    ) orelse "tada";
+
+    var exe_path_buf: [128]u8 = undefined;
+    const exe_path = std.fmt.bufPrint(&exe_path_buf, "examples/{s}.zig", .{example_name}) catch "examples/tada.zig";
+
     const exe = b.addExecutable(.{
-        .name = "ex",
-        .root_source_file = .{ .path = "examples/main.zig" },
+        .name = example_name,
+        .root_source_file = .{ .path = exe_path },
         .target = target,
         .optimize = optimize,
     });

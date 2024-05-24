@@ -106,7 +106,7 @@ pub fn main() !void {
     std.time.sleep(std.time.ns_per_ms * 180);
 
     trigger = false;
-    std.time.sleep(std.time.ns_per_ms * 20);
+    std.time.sleep(std.time.ns_per_ms * 50);
 
     // dah~
     trigger = true;
