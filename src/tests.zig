@@ -15,6 +15,7 @@ pub const osc = @import("sources/osc.zig");
 pub const coreaudio = @import("backends/coreaudio.zig");
 
 pub const clock = @import("clock.zig");
+pub const convert = @import("convert.zig");
 
 test {
     std.testing.refAllDecls(@This());
