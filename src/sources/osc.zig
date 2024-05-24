@@ -72,7 +72,6 @@ pub fn Wavetable(comptime num_buckets: comptime_int, comptime waveform: Waveform
 pub const bigWave = Wavetable(512, .wobble);
 pub const hiss = Wavetable(512, .noise);
 
-// TODO: assumes f32 output format
 pub const WavetableIterator = struct {
     phase: f32 = 0,
     wavetable: []f32,
@@ -82,6 +81,7 @@ pub const WavetableIterator = struct {
     sample_rate: f32,
     buf: [4]u8 = undefined,
     //TODO: ^ Honestly, feels weird to just point to a single sample by ref? this will surely break eventually
+    // Note: pointers are the key to all of this.....
 
     pub fn next(self: *WavetableIterator) ?[]u8 {
         const len: f32 = @floatFromInt(self.wavetable.len);

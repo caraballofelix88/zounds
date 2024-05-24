@@ -26,7 +26,7 @@ const Wobble = struct {
     }
 };
 
-// TODO: NEXT: allow for selection of MIDI input, synth playback
+// TODO: synth playback
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
