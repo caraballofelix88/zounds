@@ -15,8 +15,6 @@ pub const WavFileData = struct {
     format: main.FormatData,
 };
 
-// TODO: what to do with this field idea? Seems much
-
 // pub const Field = struct { name: []u8, size_bytes: u8, field_type: type, is_big_endian: bool = false, optional: bool = false };
 //
 // pub fn FileSpec(comptime T: type) type {
@@ -40,6 +38,7 @@ pub const WavFileData = struct {
 // }
 
 // TODO: maybe generalize file header parsing
+// Perhaps follow through with the "Field" stuff above?
 pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
     var file = try std.fs.cwd().openFile(dir, .{});
     defer file.close();
@@ -49,46 +48,44 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
 
     // read RIFF description
     const riff_bytes = try reader.readBytesNoEof(4);
-    std.debug.print("\t{s}RAFF\n", .{riff_bytes});
+    _ = riff_bytes;
 
     const file_size_raw = try reader.readBytesNoEof(4);
     const file_size = std.mem.bytesToValue(u32, &file_size_raw);
-    std.debug.print("File size (B):\t{}\n", .{file_size});
+    _ = file_size;
 
     const wavefmt = try reader.readBytesNoEof(4 + 4); // 'WAVE' + 'fmt '
-    std.debug.print("{s}\n", .{wavefmt});
+    _ = wavefmt;
 
     const format_length_raw = try reader.readBytesNoEof(4);
     const format_length = std.mem.bytesToValue(u32, &format_length_raw);
-    std.debug.print("Format data size:\t{}\n", .{format_length});
+    _ = format_length;
 
     const format_type_raw = try reader.readBytesNoEof(2);
     const format_type = std.mem.bytesToValue(u16, &format_type_raw);
-    std.debug.print("Format Type (1 is PCM):\t{}\n", .{format_type});
+    _ = format_type;
 
     const num_channels_raw = try reader.readBytesNoEof(2);
     const num_channels = std.mem.bytesToValue(u16, &num_channels_raw);
-    std.debug.print("Number of channels:\t{}\n", .{num_channels});
 
     const sample_rate_raw = try reader.readBytesNoEof(4);
     const sample_rate = std.mem.bytesToValue(u32, &sample_rate_raw);
-    std.debug.print("Sample rate:\t{}\n", .{sample_rate});
 
     // (Sample Rate * BitsPerSample * Channels) / 8
     // https://docs.fileformat.com/audio/wav/
     const byte_rate_raw = try reader.readBytesNoEof(4);
     const byte_rate = std.mem.bytesToValue(u32, &byte_rate_raw);
-    std.debug.print("Byte rate:\t{}\n", .{byte_rate});
+    _ = byte_rate;
 
     const block_align_raw = try reader.readBytesNoEof(2);
     const block_align = std.mem.bytesToValue(u16, &block_align_raw);
-    std.debug.print("Block align:\t{}\n", .{block_align});
+    _ = block_align;
 
     // (BitsPerSample * Channels) / 8.1 - 8 bit mono2 - 8 bit stereo/16 bit mono4 - 16 bit stereo
     // https://docs.fileformat.com/audio/wav/
     const bits_per_sample_raw = try reader.readBytesNoEof(2);
     const bits_per_sample = std.mem.bytesToValue(u16, &bits_per_sample_raw);
-    std.debug.print("bits per sample:\t{}\n", .{bits_per_sample});
+    _ = bits_per_sample;
 
     const data_header = try reader.readBytesNoEof(4);
     _ = data_header;
@@ -116,7 +113,8 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
     base_buffer.buf = std.mem.sliceAsBytes(dest_slice);
 
     const track_length = base_buffer.trackLength();
-    std.debug.print("Track length:\t{}:{d:2}\n", .{ @divFloor(track_length, 60), @mod(track_length, 60) });
+    _ = track_length;
+    //std.debug.print("Track length:\t{}:{d:2}\n", .{ @divFloor(track_length, 60), @mod(track_length, 60) });
 
     return base_buffer;
 }
@@ -126,8 +124,7 @@ test "readWav" {
     const file = try readWav(testing.allocator, dir);
     defer testing.allocator.free(file.buf);
 
-    // TODO: assert correct specs
     try testing.expectEqual(44_100, file.format.sample_rate);
-    try testing.expectEqual(.i16, file.format.sample_format);
+    try testing.expectEqual(.f32, file.format.sample_format);
     try testing.expectEqual(1, file.format.num_channels);
 }
