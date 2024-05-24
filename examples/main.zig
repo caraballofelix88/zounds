@@ -96,7 +96,7 @@ pub fn main() !void {
         }
     }
 
-    midi_client.connectInputSource(selected_option - 1);
+    try midi_client.connectInputSource(selected_option - 1);
 
     var should_stop = false;
     while (!should_stop) {

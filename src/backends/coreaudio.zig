@@ -17,9 +17,11 @@ const DeviceState = enum {
     starting,
 };
 
+// TODO: separate backend stuff from coreaudio implementation
 const DeviceBackend = enum { core_audio };
 
 // TODO: might not need to keep all these pointers, just rebuild the config components each time
+// TODO: Rework device context
 pub const Context = struct {
     alloc: std.mem.Allocator,
     acd: *c.AudioComponentDescription,
@@ -98,7 +100,6 @@ pub const Context = struct {
 
         const player: *Player = @ptrCast(@alignCast(refPtr));
         var source: *sources.AudioSource = @ptrCast(@alignCast(player.source));
-        // var source = player.source;
 
         // TODO: this can be format-independent if we count samples over byte by byte???
         // byte-per-byte should resolve channel playback as well as format size
@@ -110,10 +111,8 @@ pub const Context = struct {
         var frame: u32 = 0;
 
         while (frame < num_samples) : (frame += 2) { // TODO: manually interleaf channels for stereo for now
-            // TODO: Where should we determine source audio format? Here, on render?
 
             const nextSample: f32 = std.mem.bytesAsValue(f32, source.next().?[0..sample_size]).*;
-            //std.debug.print("sample in bytes:\t{}\n", .{nextSample});
 
             buf[frame] = std.math.clamp(nextSample, -1.0, 1.0);
             buf[frame + 1] = std.math.clamp(nextSample, -1.0, 1.0);
@@ -170,9 +169,6 @@ pub const Player = struct {
     is_playing: bool,
     source: *sources.AudioSource,
 
-    // NOTE: Don't use @This for simple structs!
-    // https://zig.news/kristoff/dont-self-simple-structs-fj8
-
     fn init() void {}
 
     pub fn play(p: *Player) void {
@@ -191,8 +187,7 @@ pub const Player = struct {
         p.is_playing = false;
     }
 
-    // TODO: there should be some kind of unified volume scale across backends/sources
-    pub fn setVolume(p: *Player, vol: f32) !void { // vol in Dbs
+    pub fn setVolume(p: *Player, vol: f32) !void { // vol in dBs
         const amplitude = utils.decibelsToAmplitude(vol);
 
         osStatusHandler(c.AudioUnitSetParameter(
@@ -231,7 +226,7 @@ pub const Player = struct {
 
 };
 
-const Error = error{ GenericError, InitializationError, PlaybackError, MIDIObjectNotFound };
+const Error = error{ GenericError, InitializationError, PlaybackError, MIDIObjectNotFound, MIDIPropertyError };
 
 fn osStatusHandler(result: c.OSStatus) !void {
     if (result != c.noErr) {
@@ -305,19 +300,17 @@ fn getWriteStream(buf: []u8) c.CFWriteStreamRef {
 }
 
 // resulting slice owned by buffer.
-fn getStringProperty(buf: []u8, obj_ref: c.MIDIObjectRef, property_key: []const u8) []const u8 {
+fn getStringProperty(buf: []u8, obj_ref: c.MIDIObjectRef, property_key: []const u8) ![]const u8 {
     var property_ref: c.CFStringRef = undefined;
     const key_ref = getStringRef(property_key);
 
-    // TODO: propagate errors?
     osStatusHandler(c.MIDIObjectGetStringProperty(obj_ref, key_ref, &property_ref)) catch |err| {
         std.debug.print("Error getting MIDIObject property {s}:\t{}\n", .{ property_key, err });
-        return buf; // TODO: we dont want to return this in the case of an error, make sure to throw
+        return Error.MIDIPropertyError;
     };
 
     _ = c.CFStringGetCString(property_ref, @alignCast(buf.ptr), @intCast(buf.len), c.kCFStringEncodingUTF8);
 
-    //std.debug.print("String Property: {s}:\n|{s}|\n", .{ property_key, buf });
     return std.mem.trimRight(u8, buf, "\xaa");
 }
 
@@ -505,6 +498,7 @@ pub const Midi = struct {
 
             for (client.available_inputs.items) |input| {
                 _ = input;
+                //TODO: handle deinit
                 //input.deinit();
             }
             client.available_inputs.deinit();
@@ -513,7 +507,7 @@ pub const Midi = struct {
         }
 
         // TODO: provide callback to connected port
-        pub fn connectInputSource(client: *Client, index: u8) void {
+        pub fn connectInputSource(client: *Client, index: u8) !void {
             // if (client.active_input == index) {
             //     std.debug.print("Already connected to input source {}.\n", .{index});
             //     return;
@@ -529,7 +523,7 @@ pub const Midi = struct {
             };
 
             var name_buf: [64]u8 = undefined;
-            const name = getStringProperty(@constCast(&name_buf), source, "name");
+            const name = try getStringProperty(@constCast(&name_buf), source, "name");
             std.debug.print("Connected input {}:\t{}, {s}\n", .{ index, source_id, name });
             client.active_input = index;
         }
@@ -546,13 +540,14 @@ pub const Midi = struct {
                 is_virtual = true;
             } else {
                 std.debug.print("Error creating midi source:\t{}\n", .{err});
+                return err;
             }
         };
 
         var name_buf: [64]u8 = undefined;
         var source_id: i32 = undefined;
 
-        const name = getStringProperty(&name_buf, source, "name"); // do sources have names?
+        const name = try getStringProperty(&name_buf, source, "name"); // do sources have names?
         getIntegerProperty(&source_id, source, "uniqueID");
 
         var entity_id: i32 = undefined;
@@ -561,7 +556,7 @@ pub const Midi = struct {
 
         var entity: ?Endpoint.Entity = null;
         if (!is_virtual) {
-            const entity_name = getStringProperty(&entity_name_buf, entity_ref, "name");
+            const entity_name = try getStringProperty(&entity_name_buf, entity_ref, "name");
             getIntegerProperty(&entity_id, entity_ref, "uniqueID");
             getIntegerProperty(&embedded, entity_ref, "embedded");
 
@@ -588,7 +583,7 @@ pub const Midi = struct {
 
         std.debug.print("Create \n", .{});
 
-        var name = getStringProperty(&name_buf, device_ref, "name");
+        var name = try getStringProperty(&name_buf, device_ref, "name");
         getIntegerProperty(&id, device_ref, "uniqueID");
 
         var id_str: [32]u8 = undefined;
