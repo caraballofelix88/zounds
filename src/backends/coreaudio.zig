@@ -7,6 +7,7 @@ const sources = @import("../sources/main.zig");
 const osc = @import("../sources/osc.zig");
 const utils = @import("../utils.zig");
 const midi = @import("../midi.zig");
+const backends = @import("backends.zig");
 // shoutouts to my mans jamal for planting the seeds -- https://gist.github.com/jamal/8ee096ca98759f83b4942f22d365d449
 
 const DeviceState = enum {
@@ -16,11 +17,10 @@ const DeviceState = enum {
     stopping,
     starting,
 };
-
-// TODO: separate backend stuff from coreaudio implementation
-const DeviceBackend = enum { core_audio };
-
 // TODO: Rework device context
+// - Remove extraneous struct fields
+// - get a working device list going
+// - createPlayer function pass in writeFn and options
 pub const Context = struct {
     alloc: std.mem.Allocator,
     acd: c.AudioComponentDescription,
@@ -29,9 +29,10 @@ pub const Context = struct {
     audioUnit: c.AudioUnit,
     devices: []main.Device,
 
+    // TODO: replace Self
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, config: main.Context.Config) !Self {
+    pub fn init(allocator: std.mem.Allocator, config: main.ContextConfig) !backends.Context {
         var acd = c.AudioComponentDescription{
             .componentType = c.kAudioUnitType_Output,
             .componentSubType = c.kAudioUnitSubType_DefaultOutput,
@@ -71,7 +72,18 @@ pub const Context = struct {
             std.debug.panic("failed to stream format: {}\n", .{err});
         };
 
-        return .{ .alloc = allocator, .acd = acd, .asbd = asbd, .audioUnit = audioUnit, .device = device, .devices = &.{} };
+        const ctx = try allocator.create(Context);
+
+        ctx.* = .{
+            .alloc = allocator,
+            .acd = acd,
+            .asbd = asbd,
+            .audioUnit = audioUnit,
+            .device = device,
+            .devices = &.{},
+        };
+
+        return .{ .coreaudio = ctx };
     }
 
     pub fn deinit(self: Self) void {
@@ -83,6 +95,7 @@ pub const Context = struct {
         _ = c.AudioComponentInstanceDispose(self.audioUnit);
     }
 
+    // TODO: provide callback through player struct writeFn
     pub fn renderCallback(refPtr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.C) c.OSStatus {
         _ = au_render_flags;
         _ = timestamp;
@@ -114,7 +127,7 @@ pub const Context = struct {
 
     pub fn refresh() void {} // TODO: not sure whats goin on in here just yet
 
-    pub fn createPlayer(self: Self, source: *sources.AudioSource) !*Player {
+    pub fn createPlayer(self: Self, source: *sources.AudioSource) !backends.Player {
         const player = try self.alloc.create(Player);
 
         player.* = Player{
@@ -142,7 +155,7 @@ pub const Context = struct {
             std.debug.panic("failed to initialize: {}\n", .{err});
         };
 
-        return player;
+        return .{ .coreaudio = player };
     }
 };
 
@@ -167,6 +180,7 @@ pub const Player = struct {
 
     fn init() void {}
 
+    // TODO: appropriate error handling
     pub fn play(p: *Player) void {
         osStatusHandler(c.AudioOutputUnitStart(p.audio_unit)) catch |err| {
             std.debug.print("uh oh, playing didn't work: {}\n", .{err});

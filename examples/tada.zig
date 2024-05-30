@@ -23,7 +23,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    const config = zounds.Context.Config{
+    const config = zounds.ContextConfig{
         .sample_format = .f32,
         .sample_rate = 44_100,
         .channel_count = 2,
@@ -31,7 +31,7 @@ pub fn main() !void {
     };
 
     var audio_ctx = zounds.signals.AudioContext{ .sample_rate = 44_100 };
-    var player_ctx = try zounds.CoreAudioContext.init(alloc, config);
+    var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 
     var trigger: bool = false;
     const trigger_sig: zounds.signals.Signal(bool) = .{ .ptr = &trigger };
