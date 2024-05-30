@@ -29,9 +29,6 @@ pub const Context = struct {
     audioUnit: c.AudioUnit,
     devices: []main.Device,
 
-    // TODO: replace Self
-    const Self = @This();
-
     pub fn init(allocator: std.mem.Allocator, config: main.ContextConfig) !backends.Context {
         var acd = c.AudioComponentDescription{
             .componentType = c.kAudioUnitType_Output,
@@ -86,7 +83,7 @@ pub const Context = struct {
         return .{ .coreaudio = ctx };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Context) void {
         // stop audioUnit
         _ = c.AudioOutputUnitStop(self.audioUnit);
         _ = c.AudioUnitUninitialize(self.audioUnit);
@@ -95,7 +92,7 @@ pub const Context = struct {
         _ = c.AudioComponentInstanceDispose(self.audioUnit);
     }
 
-    // TODO: provide callback through player struct writeFn
+    // TODO: provide callback through player struct writeFn?
     pub fn renderCallback(refPtr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.C) c.OSStatus {
         _ = au_render_flags;
         _ = timestamp;
@@ -108,12 +105,12 @@ pub const Context = struct {
         // byte-per-byte should resolve channel playback as well as format size
         var buf: [*]f32 = @ptrCast(@alignCast(buffer_list.?.*.mBuffers[0].mData));
 
-        const sample_size = 4; // TODO: pull in from player audio source eventually
+        const sample_size = 4; // TODO: pull in from player context
         const num_samples = num_frames * 2;
 
         var frame: u32 = 0;
 
-        while (frame < num_samples) : (frame += 2) { // TODO: manually interleaf channels for stereo for now
+        while (frame < num_samples) : (frame += 2) { // TODO: manually interleave channels for stereo for now
 
             const nextSample: f32 = std.mem.bytesAsValue(f32, source.next().?[0..sample_size]).*;
 
@@ -127,7 +124,7 @@ pub const Context = struct {
 
     pub fn refresh() void {} // TODO: not sure whats goin on in here just yet
 
-    pub fn createPlayer(self: Self, source: *sources.AudioSource) !backends.Player {
+    pub fn createPlayer(self: Context, source: *sources.AudioSource) !backends.Player {
         const player = try self.alloc.create(Player);
 
         player.* = Player{
