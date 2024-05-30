@@ -86,7 +86,7 @@ pub const Context = struct {
         return .{ .coreaudio = ctx };
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *Self) void {
         // stop audioUnit
         _ = c.AudioOutputUnitStop(self.audioUnit);
         _ = c.AudioUnitUninitialize(self.audioUnit);
@@ -232,8 +232,10 @@ pub const Player = struct {
         p.play();
     }
 
-    fn deinit() void {} // TODO:
-
+    pub fn deinit(p: *Player) void {
+        // TODO:
+        _ = p;
+    }
 };
 
 const Error = error{ GenericError, InitializationError, PlaybackError, MIDIObjectNotFound, MIDIPropertyError };
@@ -257,10 +259,10 @@ fn osStatusHandler(result: c.OSStatus) !void {
 test "basic check for leaks" {
     const alloc = std.testing.allocator;
 
-    const config = main.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
+    const config = main.ContextConfig{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
     const playerContext = try Context.init(alloc, config);
 
-    defer playerContext.deinit();
+    defer playerContext.coreaudio.deinit();
 }
 
 fn midiNotifyProc(notif: [*c]const c.MIDINotification, refCon: ?*anyopaque) callconv(.C) void {

@@ -1,5 +1,5 @@
 const std = @import("std");
-pub const coreaudio = @import("backends/coreaudio.zig");
+const testing = std.testing;
 pub const sources = @import("sources/main.zig");
 pub const osc = @import("sources/osc.zig");
 pub const wav = @import("readers/wav.zig");
@@ -38,6 +38,7 @@ pub const Context = struct {
         };
     }
 
+    // TODO: how to provide player with primary context? through writefn? options?
     //pub inline fn createPlayer(ctx: Context, device: Device, writeFn: WriteFn, options: StreamOptions) Player {
     pub inline fn createPlayer(ctx: Context, source: *sources.AudioSource) !Player {
         return .{
@@ -60,6 +61,12 @@ pub const Player = struct {
     pub inline fn setVolume(p: Player, vol: f32) !void {
         return switch (p.backend) {
             inline else => |b| try b.setVolume(vol),
+        };
+    }
+
+    pub inline fn deinit(p: *Player) void {
+        return switch (p.backend) {
+            inline else => |b| try b.deinit(),
         };
     }
 };
@@ -87,17 +94,21 @@ pub const SampleFormat = enum {
     }
 };
 
+test "SampleFormat" {}
+
 // TODO: rename: "AudioFormat"? Just "Format"?
 pub const FormatData = struct {
     sample_format: SampleFormat,
-    num_channels: u16,
-    channels: []ChannelPosition,
+    channels: []const ChannelPosition,
     sample_rate: u32,
     is_interleaved: bool = true, // channel samples interleaved?
 
-    // TODO: use channel position list instead
     pub fn frameSize(f: FormatData) usize {
-        return f.sample_format.size() * f.num_channels;
+        return f.sample_format.size() * f.numChannels();
+    }
+
+    pub fn numChannels(f: FormatData) usize {
+        return f.channels.len;
     }
 };
 
@@ -130,14 +141,22 @@ pub const ChannelPosition = enum {
     left,
     right,
 
-    pub fn fromChannelCount(count: usize) ChannelPosition[count] {
+    const mono: [1]ChannelPosition = .{.left};
+    const stereo: [2]ChannelPosition = .{ .left, .right };
+
+    pub fn fromChannelCount(count: usize) []const ChannelPosition {
         return switch (count) {
-            1 => .{.left},
-            2 => .{ .left, .right },
-            else => .{.left},
+            1 => &mono,
+            2 => &stereo,
+            else => &mono,
         };
     }
 };
+
+test "ChannelPosition.fromChannelCount" {
+    try testing.expectEqualSlices(ChannelPosition, &.{.left}, ChannelPosition.fromChannelCount(1));
+    try testing.expectEqualSlices(ChannelPosition, &.{ .left, .right }, ChannelPosition.fromChannelCount(2));
+}
 
 pub const MidiClientContext = struct {};
 
@@ -145,7 +164,7 @@ pub const MidiClientContext = struct {};
 pub const Device = struct {
     id: []const u8,
     name: []const u8,
-    channels: []ChannelPosition,
+    channels: []const ChannelPosition,
     sample_rate: u24,
     formats: SampleFormat,
 };

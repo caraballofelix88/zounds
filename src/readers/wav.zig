@@ -97,7 +97,7 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
 
     var base_buffer: main.AudioBuffer = .{
         .format = .{
-            .num_channels = num_channels,
+            .channels = main.ChannelPosition.fromChannelCount(num_channels),
             .sample_rate = sample_rate,
             .sample_format = .i16,
         },
@@ -126,5 +126,5 @@ test "readWav" {
 
     try testing.expectEqual(44_100, file.format.sample_rate);
     try testing.expectEqual(.f32, file.format.sample_format);
-    try testing.expectEqual(1, file.format.num_channels);
+    try testing.expectEqual(1, file.format.numChannels());
 }
