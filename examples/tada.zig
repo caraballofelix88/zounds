@@ -24,12 +24,16 @@ pub fn main() !void {
     const alloc = gpa.allocator();
 
     const config = zounds.ContextConfig{
-        .sample_format = .f32,
-        .sample_rate = 44_100,
-        .channel_count = 2,
         .frames_per_packet = 1,
+        .desired_format = .{
+            .sample_format = .f32,
+            .sample_rate = 44_100,
+            .channels = zounds.ChannelPosition.fromChannelCount(2),
+            .is_interleaved = true,
+        },
     };
 
+    // TODO: audio context should derive its sample rate from available backend devices/formats
     var audio_ctx = zounds.signals.AudioContext{ .sample_rate = 44_100 };
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 
@@ -96,7 +100,20 @@ pub fn main() !void {
 
     var context_source = audio_ctx.source();
 
-    const player = try player_ctx.createPlayer(&context_source);
+    const device: zounds.Device = .{
+        .sample_rate = 44_100,
+        .channels = zounds.ChannelPosition.fromChannelCount(2),
+        .id = "fake_device",
+        .name = "Fake Device",
+        .formats = &.{},
+    };
+
+    const options: zounds.StreamOptions = .{
+        .write_ref = &context_source,
+        .format = config.desired_format,
+    };
+
+    const player = try player_ctx.createPlayer(device, &writeFn, options);
     _ = try player.setVolume(-20.0);
 
     player.play();
@@ -112,4 +129,9 @@ pub fn main() !void {
     trigger = true;
     std.debug.print("-dah~\n", .{});
     std.time.sleep(std.time.ns_per_ms * 3000);
+}
+
+pub fn writeFn(ref: *anyopaque, buf: []u8) void {
+    _ = ref;
+    _ = buf;
 }

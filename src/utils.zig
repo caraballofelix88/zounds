@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // TODO: generate lookup table instead of doing math?
-
+// TODO: pitchFromStringNote, using []u8 -> midi note table
 pub fn pitchFromNote(note: u8) f32 {
     const f_note: f32 = @floatFromInt(note);
     const tone_exp = (f_note - 69.0) / 12.0;

@@ -17,17 +17,13 @@ const DeviceState = enum {
     stopping,
     starting,
 };
-// TODO: Rework device context
-// - Remove extraneous struct fields
+// TODO:
 // - get a working device list going
-// - createPlayer function pass in writeFn and options
+// - Move audiounit creation to player initialization
 pub const Context = struct {
     alloc: std.mem.Allocator,
-    acd: c.AudioComponentDescription,
-    asbd: c.AudioStreamBasicDescription,
-    device: c.AudioComponent,
     audioUnit: c.AudioUnit,
-    devices: []main.Device,
+    devices: std.ArrayList(main.Device),
 
     pub fn init(allocator: std.mem.Allocator, config: main.ContextConfig) !backends.Context {
         var acd = c.AudioComponentDescription{
@@ -50,15 +46,14 @@ pub const Context = struct {
             std.debug.panic("audio component instance failed: {}\n", .{err});
         };
 
-        const bytesPerFrame = config.sample_format.size() * config.channel_count;
+        const bytesPerFrame: u32 = @intCast(config.desired_format.frameSize());
 
         const asbd = c.AudioStreamBasicDescription{
             .mFormatID = c.kAudioFormatLinearPCM,
-            // TODO: update audio format flags based on config.sample_format, or just force convert into f32
-            .mFormatFlags = 0 | c.kAudioFormatFlagIsFloat,
-            .mSampleRate = @as(f64, @floatFromInt(config.sample_rate)),
-            .mBitsPerChannel = config.sample_format.bitSize(),
-            .mChannelsPerFrame = config.channel_count,
+            .mFormatFlags = 0 | c.kAudioFormatFlagIsFloat, // forcing float sample format here for now
+            .mSampleRate = @as(f64, @floatFromInt(config.desired_format.sample_rate)),
+            .mBitsPerChannel = config.desired_format.sample_format.bitSize(),
+            .mChannelsPerFrame = @as(u32, @intCast(config.desired_format.channels.len)),
             .mFramesPerPacket = config.frames_per_packet, // apparently should always be 1 for PCM output
             .mBytesPerFrame = bytesPerFrame,
             .mBytesPerPacket = bytesPerFrame * config.frames_per_packet,
@@ -73,33 +68,34 @@ pub const Context = struct {
 
         ctx.* = .{
             .alloc = allocator,
-            .acd = acd,
-            .asbd = asbd,
             .audioUnit = audioUnit,
-            .device = device,
-            .devices = &.{},
+            .devices = undefined,
         };
 
         return .{ .coreaudio = ctx };
     }
 
-    pub fn deinit(self: *Context) void {
-        // stop audioUnit
-        _ = c.AudioOutputUnitStop(self.audioUnit);
-        _ = c.AudioUnitUninitialize(self.audioUnit);
-
-        // dispose of instance
-        _ = c.AudioComponentInstanceDispose(self.audioUnit);
+    pub fn deinit(ctx: *Context) void {
+        // TODO:
+        _ = ctx;
     }
 
-    // TODO: provide callback through player struct writeFn?
+    pub fn devices(ctx: Context) []const main.Device {
+        return ctx.devices.items;
+    }
+
     pub fn renderCallback(refPtr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.C) c.OSStatus {
         _ = au_render_flags;
         _ = timestamp;
         _ = bus_number;
 
         const player: *Player = @ptrCast(@alignCast(refPtr));
-        var source: *sources.AudioSource = @ptrCast(@alignCast(player.source));
+
+        // TODO: move render stuff into writeFn
+        const writeFn: main.WriteFn = player.writeFn;
+        _ = writeFn;
+
+        var source: *sources.AudioSource = @ptrCast(@alignCast(player.write_ref));
 
         // TODO: this can be format-independent if we count samples over byte by byte???
         // byte-per-byte should resolve channel playback as well as format size
@@ -122,28 +118,38 @@ pub const Context = struct {
         return c.noErr;
     }
 
-    pub fn refresh() void {} // TODO: not sure whats goin on in here just yet
+    pub fn refresh() void {} // TODO: list available devices here
 
-    pub fn createPlayer(self: Context, source: *sources.AudioSource) !backends.Player {
-        const player = try self.alloc.create(Player);
+    pub fn createPlayer(ctx: *Context, device: main.Device, writeFn: main.WriteFn, options: main.StreamOptions) !backends.Player {
+        const player = try ctx.alloc.create(Player);
+
+        _ = device;
 
         player.* = Player{
-            .alloc = self.alloc,
-            .audio_unit = self.audioUnit,
+            .alloc = ctx.alloc,
+            .audio_unit = ctx.audioUnit,
             .is_playing = false,
-            .ctx = &self,
-            .source = source,
+            .ctx = ctx,
+            .writeFn = writeFn,
+            .write_ref = options.write_ref,
         };
 
-        const input = try self.alloc.create(c.AURenderCallbackStruct);
-        defer self.alloc.destroy(input);
+        const input = try ctx.alloc.create(c.AURenderCallbackStruct);
+        errdefer ctx.alloc.destroy(input);
 
         input.* = c.AURenderCallbackStruct{
             .inputProc = &renderCallback,
             .inputProcRefCon = player,
         };
 
-        osStatusHandler(c.AudioUnitSetProperty(self.audioUnit, c.kAudioUnitProperty_SetRenderCallback, c.kAudioUnitScope_Input, 0, input, @sizeOf(@TypeOf(input.*)))) catch |err| {
+        osStatusHandler(c.AudioUnitSetProperty(
+            ctx.audioUnit,
+            c.kAudioUnitProperty_SetRenderCallback,
+            c.kAudioUnitScope_Input,
+            0,
+            input,
+            @sizeOf(@TypeOf(input.*)),
+        )) catch |err| {
             std.debug.panic("failed to set render callback: {}\n", .{err});
         };
 
@@ -156,24 +162,15 @@ pub const Context = struct {
     }
 };
 
-fn freeDevice(device: main.Device) void {
-    // clean up audioUnit
-    // stop audioUnit
-    _ = c.AudioOutputUnitStop(device.ptr.*);
-    _ = c.AudioUnitUninitialize(device.ptr.*);
-
-    // dispose of instance
-    _ = c.AudioComponentInstanceDispose(device.ptr.*);
-}
-
-// Controls audio context and interfaces playback actions
+// Interface for playback actions
 pub const Player = struct {
     alloc: std.mem.Allocator,
     audio_unit: c.AudioUnit,
     ctx: *const Context,
-    volume: f32 = 0.5, // useless for now
+    volume: f32 = 0.5,
     is_playing: bool,
-    source: *sources.AudioSource,
+    writeFn: main.WriteFn,
+    write_ref: *anyopaque,
 
     fn init() void {}
 
@@ -223,15 +220,13 @@ pub const Player = struct {
         return vol;
     }
 
-    pub fn setAudioSource(p: *Player, source: *sources.AudioSource) void {
-        p.pause();
-        p.source = source;
-        p.play();
-    }
-
     pub fn deinit(p: *Player) void {
-        // TODO:
-        _ = p;
+        // clean up audioUnit instance
+        _ = c.AudioOutputUnitStop(p.audio_unit);
+        _ = c.AudioUnitUninitialize(p.audio_unit);
+        _ = c.AudioComponentInstanceDispose(p.audio_unit);
+
+        p.alloc.destroy(p);
     }
 };
 
@@ -256,7 +251,15 @@ fn osStatusHandler(result: c.OSStatus) !void {
 test "basic check for leaks" {
     const alloc = std.testing.allocator;
 
-    const config = main.ContextConfig{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
+    const config = main.ContextConfig{
+        .frames_per_packet = 1,
+        .desired_format = .{
+            .sample_format = .f32,
+            .sample_rate = 44_100,
+            .channels = main.ChannelPosition.fromChannelCount(2),
+            .is_interleaved = true,
+        },
+    };
     const playerContext = try Context.init(alloc, config);
 
     defer playerContext.coreaudio.deinit();

@@ -126,5 +126,5 @@ test "readWav" {
 
     try testing.expectEqual(44_100, file.format.sample_rate);
     try testing.expectEqual(.f32, file.format.sample_format);
-    try testing.expectEqual(1, file.format.numChannels());
+    try testing.expectEqual(1, file.format.channels.len);
 }

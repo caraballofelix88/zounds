@@ -38,14 +38,18 @@ pub const Context = struct {
         };
     }
 
-    // TODO: how to provide player with primary context? through writefn? options?
-    //pub inline fn createPlayer(ctx: Context, device: Device, writeFn: WriteFn, options: StreamOptions) Player {
-    pub inline fn createPlayer(ctx: Context, source: *sources.AudioSource) !Player {
+    pub inline fn createPlayer(ctx: Context, device: Device, writeFn: WriteFn, options: StreamOptions) !Player {
         return .{
             .backend = switch (ctx.backend) {
-                inline else => |b| try b.createPlayer(source),
+                inline else => |b| try b.createPlayer(device, writeFn, options),
             },
         };
+    }
+
+    pub inline fn devices(ctx: Context) []const Device {
+        return .{ .backend = switch (ctx.backend) {
+            inline else => |b| try b.devices(),
+        } };
     }
 };
 
@@ -104,11 +108,7 @@ pub const FormatData = struct {
     is_interleaved: bool = true, // channel samples interleaved?
 
     pub fn frameSize(f: FormatData) usize {
-        return f.sample_format.size() * f.numChannels();
-    }
-
-    pub fn numChannels(f: FormatData) usize {
-        return f.channels.len;
+        return f.sample_format.size() * f.channels.len;
     }
 };
 
@@ -129,11 +129,8 @@ pub const AudioBuffer = struct {
     }
 };
 
-// TODO: replace fields with a "Desired format" formatdata struct
 pub const ContextConfig = struct {
-    sample_format: SampleFormat,
-    sample_rate: u32,
-    channel_count: u8,
+    desired_format: FormatData,
     frames_per_packet: u8,
 };
 
@@ -166,11 +163,12 @@ pub const Device = struct {
     name: []const u8,
     channels: []const ChannelPosition,
     sample_rate: u24,
-    formats: SampleFormat,
+    formats: []const SampleFormat,
 };
 
 pub const StreamOptions = struct {
     format: FormatData,
+    write_ref: *anyopaque,
 };
 
 pub const WriteFn = *const fn (player_opaque: *anyopaque, output: []u8) void;

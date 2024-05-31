@@ -40,15 +40,11 @@ pub const Context = struct {
         return ctx.device_list.items[0];
     }
 
-    //pub fn createPlayer(ctx: *Context, device: main.Device, writeFn: main.WriteFn, options: main.StreamOptions) backends.Player {
-    pub fn createPlayer(ctx: *Context, source: *main.sources.AudioSource) !backends.Player {
-        // TODO: redo create player func to allow for more flexible creation
+    pub fn createPlayer(ctx: *Context, device: main.Device, writeFn: main.WriteFn, options: main.StreamOptions) !backends.Player {
+        _ = device;
+        _ = writeFn;
+        _ = options;
 
-        _ = source;
-        // _ = device;
-        // _ = writeFn;
-        // _ = options;
-        //
         const p = try ctx.alloc.create(Player);
 
         p.* = .{
