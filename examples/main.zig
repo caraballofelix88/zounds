@@ -26,6 +26,33 @@ const Wobble = struct {
     }
 };
 
+// TODO: will sound jank because of abuse of osc node and aggressive ticking of osc instance phase prop,
+// could be fixed by using global clock instead?
+const PolySynth = struct {
+    ctx: *const zounds.signals.AudioContext,
+    osc: *zounds.signals.TestWavetableOscNode,
+    active_notes: *[]const u8,
+
+    pub fn nextFn(ptr: *anyopaque) f32 {
+        var p: *PolySynth = @ptrCast(@alignCast(ptr));
+
+        var out: f32 = undefined;
+
+        for (p.active_notes.*) |note| {
+            p.osc.pitch = .{ .static = zounds.utils.pitchFromNote(note) };
+            out += p.osc.node().signal().get();
+        }
+
+        out /= @floatFromInt(p.active_notes.len);
+
+        return out;
+    }
+
+    pub fn node(w: *PolySynth) zounds.signals.Node(f32) {
+        return .{ .ptr = w, .nextFn = nextFn };
+    }
+};
+
 // TODO: synth playback
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -34,37 +61,67 @@ pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
 
-    const config = zounds.Context.Config{ .sample_format = .f32, .sample_rate = 44_100, .channel_count = 2, .frames_per_packet = 1 };
+    const config = zounds.ContextConfig{
+        .desired_format = .{
+            .sample_format = .f32,
+            .sample_rate = 44_100,
+            .channels = zounds.ChannelPosition.fromChannelCount(2),
+        },
+        .frames_per_packet = 1,
+    };
 
     var pitch: f32 = 440.0;
     var audio_ctx = zounds.signals.AudioContext{ .sample_rate = 44_100 };
 
-    const true_signal: zounds.signals.Signal(bool) = .{ .static = true };
-    var adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, true_signal);
+    //const signal_true: zounds.signals.Signal(bool) = .{ .static = true };
+    // var adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, signal_true);
     var wobble = Wobble{ .ctx = &audio_ctx, .base_pitch = .{ .ptr = &pitch } };
     var signal_osc = zounds.signals.TestWavetableOscNode{
         .ctx = &audio_ctx,
         .pitch = wobble.node().signal(),
-        .amp = adsr.node().signal(),
+        .amp = .{ .static = 1.0 },
     };
 
-    audio_ctx.sink = signal_osc.node().signal();
+    var active_notes = std.ArrayList(u8).init(alloc);
+    defer active_notes.deinit();
+
+    var synth = PolySynth{
+        .active_notes = &active_notes.items,
+        .osc = &signal_osc,
+        .ctx = &audio_ctx,
+    };
 
     var context_source = audio_ctx.source();
 
     var bufferSource = try zounds.sources.BufferSource.init(alloc, &context_source);
     defer bufferSource.deinit();
 
-    const playerContext = try zounds.CoreAudioContext.init(alloc, config);
+    audio_ctx.sink = synth.node().signal();
+
+    var playerContext = try zounds.Context.init(.coreaudio, alloc, config);
     defer playerContext.deinit();
 
     var player_source = bufferSource.source();
 
-    const player = try playerContext.createPlayer(@constCast(&player_source));
+    const dummy_device = zounds.Device{
+        .id = "dummy_device",
+        .name = "Dummy Device",
+        .channels = undefined,
+        .formats = std.meta.tags(zounds.SampleFormat),
+        .sample_rate = 44_100,
+    };
+
+    var player = try playerContext.createPlayer(dummy_device, &writeFn, .{
+        .format = config.desired_format,
+        .write_ref = &player_source,
+    });
     _ = try player.setVolume(-20.0);
 
     var queue: std.fifo.LinearFifo(zounds.midi.Message, .Dynamic) = std.fifo.LinearFifo(zounds.midi.Message, .Dynamic).init(alloc);
+
     var mutex = std.Thread.Mutex{};
+
+    // TODO: split out midi backends
     const on_update_struct = zounds.coreaudio.Midi.ClientCallbackStruct{ .cb = &midiCallback, .ref = @ptrCast(@constCast(&queue)), .mut = &mutex };
 
     var midi_client = try zounds.coreaudio.Midi.Client.init(alloc, &on_update_struct);
@@ -107,15 +164,32 @@ pub fn main() !void {
 
         while (queue.readItem()) |msg| {
             std.debug.print("Reading msg in main thread:\t{}\n", .{msg});
-            if (msg.status.kind() == .note_on and msg.data & 0xFF00 == 0x2c00) {
+            if (msg.status.kind() == .note_on and msg.data & 0xFF00 == 0x2c00) { // TODO: what note is this, lol?
                 should_stop = true;
             }
+
+            const note: u8 = @truncate(msg.data >> 8);
+
+            if (msg.status.kind() == .note_on) {
+                try active_notes.append(note);
+            } else if (msg.status.kind() == .note_off) {
+                const note_idx = std.mem.indexOfScalar(u8, active_notes.items, note);
+                _ = active_notes.swapRemove(note_idx.?);
+            }
+
+            std.debug.print("active_notes: {}\n", .{active_notes.items.len});
         }
     }
 
     player.pause();
 }
 
+pub fn writeFn(ref: *anyopaque, buf: []u8) void {
+    _ = ref;
+    _ = buf;
+}
+
+// TODO: maybe add listener pattern for tracking a list of midi queue receivers?
 fn midiCallback(sent_msg: *const zounds.midi.Message, queue_ptr: *anyopaque) callconv(.C) void {
     var queue: *std.fifo.LinearFifo(zounds.midi.Message, .Dynamic) = @ptrCast(@constCast(@alignCast(queue_ptr)));
 

@@ -10,6 +10,9 @@ pub const signals = @import("signals.zig");
 pub const midi = @import("midi.zig");
 pub const backends = @import("backends/backends.zig");
 
+// TODO: midi client backends
+pub const coreaudio = @import("backends/coreaudio.zig");
+
 pub const Backend = backends.Backend;
 
 pub const Context = struct {

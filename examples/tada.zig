@@ -118,6 +118,7 @@ pub fn main() !void {
 
     player.play();
 
+    // ta
     trigger = true;
     std.debug.print("ta", .{});
     std.time.sleep(std.time.ns_per_ms * 180);
