@@ -1,5 +1,6 @@
 const std = @import("std");
 const main = @import("../main.zig");
+const sources = @import("../sources/main.zig");
 const backends = @import("backends.zig");
 
 pub const dummy_device = main.Device{
@@ -14,10 +15,11 @@ pub const Context = struct {
     alloc: std.mem.Allocator,
     device_list: std.ArrayListUnmanaged(main.Device),
 
-    pub fn init(allocator: std.mem.Allocator) backends.Context {
-        const ctx = allocator.create(Context);
+    pub fn init(allocator: std.mem.Allocator, config: main.ContextConfig) !backends.Context {
+        _ = config;
+        const ctx = try allocator.create(Context);
 
-        ctx.* = .{ .alloc = allocator, .device_list = .{ .items = &.{dummy_device} } };
+        ctx.* = .{ .alloc = allocator, .device_list = .{ .items = undefined } };
 
         return .{ .dummy = ctx };
     }
@@ -53,6 +55,35 @@ pub const Context = struct {
         };
 
         return .{ .dummy = p };
+    }
+
+    // TODO: copypasted from coreaudio, probably not necessary for dummy. Consider how to consume raw signal, though
+    pub fn renderCallback(refPtr: ?*anyopaque, buf: []u8, num_frames: usize) void {
+        const player: *Player = @ptrCast(@alignCast(refPtr));
+
+        // TODO: move render stuff into writeFn
+        const writeFn: main.WriteFn = player.writeFn;
+        _ = writeFn;
+
+        var source: *sources.AudioSource = @ptrCast(@alignCast(player.write_ref));
+
+        // TODO: this can be format-independent if we count samples over byte by byte???
+        // byte-per-byte should resolve channel playback as well as format size
+        var cast_buf: [*]f32 = @ptrCast(@alignCast(buf));
+
+        const sample_size = 4; // TODO: pull in from player context
+        const num_samples = num_frames * 2;
+
+        var frame: u32 = 0;
+
+        while (frame < num_samples) : (frame += 2) { // TODO: manually interleave channels for stereo for now
+
+            const nextSample: f32 = std.mem.bytesAsValue(f32, source.next().?[0..sample_size]).*;
+
+            cast_buf[frame] = std.math.clamp(nextSample, -1.0, 1.0);
+            cast_buf[frame + 1] = std.math.clamp(nextSample, -1.0, 1.0);
+            // buf[frame + 1] = fromIterR; //std.math.shr(f64, fromIter, 32) | fromIter;
+        }
     }
 };
 

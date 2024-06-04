@@ -62,6 +62,12 @@ pub const Player = struct {
         };
     }
 
+    pub inline fn pause(p: Player) void {
+        return switch (p.backend) {
+            inline else => |b| b.play(),
+        };
+    }
+
     pub inline fn setVolume(p: Player, vol: f32) !void {
         return switch (p.backend) {
             inline else => |b| try b.setVolume(vol),
@@ -131,7 +137,7 @@ pub const AudioBuffer = struct {
 
 pub const ContextConfig = struct {
     desired_format: FormatData,
-    frames_per_packet: u8,
+    frames_per_packet: u8, // TODO: this is more of a stream option concern
 };
 
 pub const ChannelPosition = enum {
