@@ -1,45 +1,19 @@
 const std = @import("std");
 const zounds = @import("zounds");
 
-// simple LFO
-const Wobble = struct {
-    ctx: *const zounds.signals.AudioContext,
-    base_pitch: zounds.signals.Signal(f32) = .{ .static = 440.0 },
-    frequency: zounds.signals.Signal(f32) = .{ .static = 10.0 },
-    amp: zounds.signals.Signal(f32) = .{ .static = 10.0 },
-    phase: f32 = 0,
-
-    pub fn nextFn(ptr: *anyopaque) f32 {
-        var w: *Wobble = @ptrCast(@alignCast(ptr));
-
-        w.phase += std.math.tau * w.frequency.get() / @as(f32, @floatFromInt(w.ctx.sample_rate));
-
-        while (w.phase >= std.math.tau) {
-            w.phase -= std.math.tau;
-        }
-
-        return w.base_pitch.get() + w.amp.get() * std.math.sin(w.phase);
-    }
-
-    pub fn node(w: *Wobble) zounds.signals.Node(f32) {
-        return .{ .ptr = w, .nextFn = nextFn };
-    }
-};
-
-// TODO: will sound jank because of abuse of osc node and aggressive ticking of osc instance phase prop,
-// could be fixed by using global clock instead?
 const PolySynth = struct {
     ctx: *const zounds.signals.AudioContext,
     osc: *zounds.signals.TestWavetableOscNode,
-    active_notes: *[]const u8,
+    active_notes: *[]SynthNote,
 
     pub fn nextFn(ptr: *anyopaque) f32 {
         var p: *PolySynth = @ptrCast(@alignCast(ptr));
 
         var out: f32 = undefined;
 
-        for (p.active_notes.*) |note| {
-            p.osc.pitch = .{ .static = zounds.utils.pitchFromNote(note) };
+        for (p.active_notes.*) |*note| {
+            p.osc.pitch = .{ .static = zounds.utils.pitchFromNote(note.value) };
+            p.osc.amp = .{ .node = note.envelope.node() };
             out += p.osc.node().signal().get();
         }
 
@@ -51,6 +25,11 @@ const PolySynth = struct {
     pub fn node(w: *PolySynth) zounds.signals.Node(f32) {
         return .{ .ptr = w, .nextFn = nextFn };
     }
+};
+
+const SynthNote = struct {
+    value: u8,
+    envelope: zounds.envelope.Envelope,
 };
 
 // TODO: synth playback
@@ -70,19 +49,15 @@ pub fn main() !void {
         .frames_per_packet = 1,
     };
 
-    var pitch: f32 = 440.0;
     var audio_ctx = zounds.signals.AudioContext{ .sample_rate = 44_100 };
 
-    //const signal_true: zounds.signals.Signal(bool) = .{ .static = true };
-    // var adsr = zounds.envelope.Envelope.init(&zounds.envelope.adsr, signal_true);
-    var wobble = Wobble{ .ctx = &audio_ctx, .base_pitch = .{ .ptr = &pitch } };
     var signal_osc = zounds.signals.TestWavetableOscNode{
         .ctx = &audio_ctx,
-        .pitch = wobble.node().signal(),
+        .pitch = .{ .static = 440.0 },
         .amp = .{ .static = 1.0 },
     };
 
-    var active_notes = std.ArrayList(u8).init(alloc);
+    var active_notes = std.ArrayList(SynthNote).init(alloc);
     defer active_notes.deinit();
 
     var synth = PolySynth{
@@ -133,6 +108,37 @@ pub fn main() !void {
     var input_buffer: [25]u8 = undefined;
     var selected_option: u8 = 0;
 
+    const adsr: [4]zounds.envelope.Ramp = .{
+        .{ // attack
+            .from = 0.0,
+            .to = 1.0,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = .{ .seconds = 0.05 },
+        },
+        .{ // decay
+            .from = 1.0,
+            .to = 0.7,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = .{ .seconds = 0.5 },
+        },
+        .{ // sustain
+            .from = 0.7,
+            .to = 0.5,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = .{ .seconds = 0.8 },
+        },
+        .{ // release
+            .from = 0.5,
+            .to = 0.0,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = .{ .seconds = 0.3 },
+        },
+    };
+
     while (selected_option == 0) {
         try stdout.print("Select MIDI input from available options: \n", .{});
 
@@ -171,13 +177,47 @@ pub fn main() !void {
             const note: u8 = @truncate(msg.data >> 8);
 
             if (msg.status.kind() == .note_on) {
-                try active_notes.append(note);
+                const note_idx: ?usize = blk: {
+                    for (active_notes.items, 0..) |n, idx| {
+                        if (n.value == note) {
+                            break :blk idx;
+                        }
+                    }
+                    break :blk null;
+                };
+                if (note_idx) |idx| {
+                    active_notes.items[idx].envelope.attack();
+                } else {
+                    var env = zounds.envelope.Envelope.init(&adsr, .{ .static = false });
+                    env.attack();
+                    try active_notes.append(SynthNote{ .value = note, .envelope = env });
+                }
             } else if (msg.status.kind() == .note_off) {
-                const note_idx = std.mem.indexOfScalar(u8, active_notes.items, note);
-                _ = active_notes.swapRemove(note_idx.?);
-            }
+                const note_idx: ?usize = blk: {
+                    for (active_notes.items, 0..) |n, idx| {
+                        if (n.value == note) {
+                            break :blk idx;
+                        }
+                    }
+                    break :blk null;
+                };
 
-            std.debug.print("active_notes: {}\n", .{active_notes.items.len});
+                // set release
+                if (note_idx) |idx| {
+                    active_notes.items[idx].envelope.release();
+                }
+            }
+        }
+
+        // sweep active notes for completed envs
+        const epsilon = 0.005;
+
+        // TODO: iterating across array as we delete from it is breaking
+        // Happens when we remove multiple notes in same frame?
+        for (active_notes.items, 0..) |n, idx| {
+            if (n.envelope.ramp_index >= 1 and n.envelope.latest_value <= epsilon) {
+                _ = active_notes.swapRemove(idx);
+            }
         }
     }
 

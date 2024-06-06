@@ -186,6 +186,7 @@ pub const adsr: [4]Ramp = .{
 
 // TODO: create a method to start at some arbitrary point anywhere within envelope duration? Using context?
 // TODO: how do we make stateless, for reuse across multiple oscillators or MIDI voices?
+//NOTE: stateless kind of a hefty tradeoff, maybe....
 // TODO: rename to ADSR
 pub const Envelope = struct {
     ramps: []const Ramp,
@@ -249,7 +250,7 @@ pub const Envelope = struct {
         return e.active and e.ramp_index < e.ramps.len;
     }
 
-    fn attack(e: *Envelope) void {
+    pub fn attack(e: *Envelope) void {
         e.active = true;
         e.ramp_index = 0;
         e.sample_index = 0;
@@ -257,7 +258,7 @@ pub const Envelope = struct {
         e.curr_ramp.from = e.latest_value;
     }
 
-    fn release(e: *Envelope) void {
+    pub fn release(e: *Envelope) void {
         e.ramp_index = 3;
         e.sample_index = 0;
         e.curr_ramp = e.ramps[3];

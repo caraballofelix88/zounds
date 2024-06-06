@@ -1,6 +1,31 @@
 const std = @import("std");
 const zounds = @import("zounds");
 
+// simple LFO
+const Wobble = struct {
+    ctx: *const zounds.signals.AudioContext,
+    base_pitch: zounds.signals.Signal(f32) = .{ .static = 440.0 },
+    frequency: zounds.signals.Signal(f32) = .{ .static = 10.0 },
+    amp: zounds.signals.Signal(f32) = .{ .static = 10.0 },
+    phase: f32 = 0,
+
+    pub fn nextFn(ptr: *anyopaque) f32 {
+        var w: *Wobble = @ptrCast(@alignCast(ptr));
+
+        w.phase += std.math.tau * w.frequency.get() / @as(f32, @floatFromInt(w.ctx.sample_rate));
+
+        while (w.phase >= std.math.tau) {
+            w.phase -= std.math.tau;
+        }
+
+        return w.base_pitch.get() + w.amp.get() * std.math.sin(w.phase);
+    }
+
+    pub fn node(w: *Wobble) zounds.signals.Node(f32) {
+        return .{ .ptr = w, .nextFn = nextFn };
+    }
+};
+
 pub const ChordNode = struct {
     ctx: *zounds.signals.AudioContext,
     notes: [3]zounds.signals.Signal(f32),
