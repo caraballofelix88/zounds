@@ -18,6 +18,7 @@ pub const Backend = backends.Backend;
 pub const Context = struct {
     alloc: std.mem.Allocator,
     backend: backends.Context,
+    signal: signals.Context,
 
     pub fn init(comptime backend: ?Backend, allocator: std.mem.Allocator, config: ContextConfig) !Context {
         const backend_ctx: backends.Context = blk: {
