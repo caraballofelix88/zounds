@@ -34,8 +34,9 @@ pub const Context = struct {
         processFn: *const fn (*anyopaque) void,
         inlet: *?Context.Signal(f32),
         outlet: *?Context.Signal(f32),
-        //inlets: *const fn (*anyopaque) void,
-        //outlets: *const fn (*anyopaque) void,
+
+        inlets: []*?Context.Signal(f32) = &.{},
+        outlets: []*?Context.Signal(f32) = &.{},
 
         pub fn process(n: Context.Node) void {
             n.processFn(n.ptr);
@@ -80,40 +81,121 @@ pub const Context = struct {
         }
 
         // TODO: NEXT: comptime inlets and outlets
-        pub fn inlets(ptr: *anyopaque) void {
-            return getInlets(ConcreteA, ptr);
-        }
-
-        pub fn outlets(ptr: *anyopaque) void {
-            // TK
-            _ = ptr;
-            return;
-        }
+        // pub fn inlets(ptr: *anyopaque) void {
+        //     return getInlets(ConcreteA, ptr);
+        // }
+        //
+        // pub fn outlets(ptr: *anyopaque) void {
+        //     // TK
+        //     _ = ptr;
+        //     return;
+        // }
 
         pub fn node(self: *ConcreteA) Context.Node {
             return .{ .processFn = ConcreteA.process, .ptr = self, .inlet = &self.in, .outlet = &self.out, .id = self.id };
         }
     };
 
-    fn getInlets(comptime T: anytype, ptr: *anyopaque) void {
-        const node: *T = @ptrCast(@alignCast(ptr));
-        _ = node;
-        const fields = @typeInfo(T).Struct.fields;
+    // @This() to get node struct type
 
-        inline for (fields) |f| {
-            if (std.mem.startsWith(u8, f.name, "in")) {
-                std.debug.print("field: {}\n", .{f});
-            }
-        }
+    test "getNumPorts" {
+        const node = .{
+            .in_one = "1",
+            .in_two = "2",
+            .in_three = "3",
+            .drive_in = "no",
+            .out_back = "yes",
+            .steak_house = "yum",
+        };
+
+        try testing.expectEqual(3, getNumPorts(@TypeOf(node), .in));
+        try testing.expectEqual(1, getNumPorts(@TypeOf(node), .out));
     }
 
-    test "getInlets" {
-        var ctx = try Context.init(testing.allocator_instance.allocator());
-        defer ctx.deinit();
+    const PortDir = enum { in, out };
+    fn getNumPorts(comptime T: anytype, dir: PortDir) comptime_int {
+        const fields = @typeInfo(T).Struct.fields;
+        var count = 0;
 
-        const concrete_a = ConcreteA{ .ctx = &ctx };
-        _ = concrete_a;
-        //getInlets(ConcreteA, &concrete_a);
+        const dir_str = switch (dir) {
+            .in => "in",
+            .out => "out",
+        };
+
+        for (fields) |f| {
+            if (std.mem.startsWith(u8, f.name, dir_str)) {
+                count += 1;
+            }
+        }
+
+        return count;
+    }
+
+    fn Ports(comptime T: anytype, S: anytype) type {
+        const num_in_ports = getNumPorts(T, .in);
+        const num_out_ports = getNumPorts(T, .out);
+
+        // const S = ?Context.Signal(f32);
+
+        const inlet_names: [num_in_ports][]const u8 = comptime blk: {
+            var names: [num_in_ports][]const u8 = .{undefined} ** num_in_ports;
+            const fields = std.meta.fields(T);
+            var idx: usize = 0;
+
+            for (fields) |f| {
+                const name: []const u8 = f.name;
+                if (std.mem.startsWith(u8, name, "in")) {
+                    names[idx] = name;
+                    idx += 1;
+                }
+            }
+
+            break :blk names;
+        };
+
+        return struct {
+            in: [num_in_ports]*S = undefined,
+            out: [num_out_ports]*S = undefined,
+
+            pub fn init(n: *const T) @This() {
+                const in = blk: {
+                    var result: [num_in_ports]*S = .{undefined} ** num_in_ports;
+
+                    inline for (inlet_names, 0..) |name, idx| {
+                        const offset = @offsetOf(T, name);
+                        result[idx] = @ptrFromInt(@intFromPtr(n) + offset);
+                    }
+
+                    break :blk result;
+                };
+
+                return .{ .in = in, .out = .{undefined} ** num_out_ports };
+            }
+
+            fn outlet_offsets() void {
+                std.debug.print("outlets!", .{});
+                return;
+            }
+        };
+    }
+
+    // TODO: NEXT: Get filetered field names in comptime, to pull struct offsets at runtime
+    // maybe using @field()????
+
+    test "Ports" {
+        const PortNode = struct {
+            in_one: []const u8 = "1",
+            in_two: []const u8 = "2",
+            in_three: []const u8 = "3",
+            drive_in: []const u8 = "no",
+            out_back: []const u8 = "yes",
+            steak_house: []const u8 = "yum",
+        };
+        const node = PortNode{};
+
+        const p = Ports(PortNode, []const u8).init(&node);
+
+        try testing.expectEqualSlices(*const []const u8, &.{ &node.in_one, &node.in_two, &node.in_three }, &p.in);
     }
 
     test "ConcreteA node interface" {
@@ -247,7 +329,6 @@ pub const Context = struct {
     }
 
     pub fn next(ctx: *Context) !f32 {
-
         // process all nodes
         ctx.process();
 
