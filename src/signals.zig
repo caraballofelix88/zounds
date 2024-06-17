@@ -41,15 +41,80 @@ pub const Context = struct {
         pub fn process(n: Context.Node) void {
             n.processFn(n.ptr);
         }
-
-        // pub fn inlets(n: Context.Node) void {
-        //     n.inlets(n.ptr);
-        // }
-        //
-        // pub fn outlets(n: Context.Node) void {
-        //     n.outlets(n.ptr);
-        // }
     };
+
+    // TODO: NEXT: finish hashing idea for comptime protocol for node
+    pub const NewNode = struct {
+        id: []const u8 = "x",
+        ptr: *anyopaque,
+        ports: *anyopaque,
+        processFn: *const fn (*anyopaque) void,
+        inletsFn: *const fn (*anyopaque) []*S,
+        outletsFn: *const fn (*anyopaque) []*S,
+
+        const Self = @This();
+        const S = []const u8;
+
+        pub fn process(self: Self) void {
+            self.processFn(self.ptr);
+        }
+
+        pub fn ins(self: Self) []*S {
+            return self.inletsFn(self.ports);
+        }
+
+        pub fn outs(self: Self) []*S {
+            return self.outletsFn(self.ports);
+        }
+    };
+
+    test "NewNode" {
+
+        // TODO: Consider alternatives for the interface objects outside of the concrete class
+        // Prioritiies:
+        // - Runtime-performant
+        // - End-user ergonomics
+        const TestStruct = struct {
+            in_one: []const u8 = "1",
+            in_two: []const u8 = "2",
+            in_three: []const u8 = "3",
+            drive_in: []const u8 = "no",
+            out_back: []const u8 = "yes",
+            steak_house: []const u8 = "yum",
+
+            const Self = @This();
+            const SignalType = []const u8;
+            pub const P = Ports(Self, SignalType);
+            pub const ins = [_]std.meta.FieldEnum(Self){ .in_one, .in_two, .in_three };
+            pub const outs = [_]std.meta.FieldEnum(Self){.out_back};
+
+            pub fn process(ptr: *anyopaque) void {
+                _ = ptr;
+            }
+
+            pub fn inlets(ports_ptr: *anyopaque) []*SignalType {
+                const ports: *P = @ptrCast(@alignCast(ports_ptr));
+
+                return ports.inlets();
+            }
+
+            pub fn outlets(ports_ptr: *anyopaque) []*SignalType {
+                const ports: *P = @ptrCast(@alignCast(ports_ptr));
+
+                return ports.outlets();
+            }
+
+            pub fn node(self: *Self, ports: *P) NewNode {
+                return .{ .ptr = self, .processFn = &Self.process, .ports = ports, .inletsFn = &P.inlets, .outletsFn = &P.outlets };
+            }
+        };
+        var test_elem: TestStruct = TestStruct{};
+        var ports = TestStruct.P.init(&test_elem);
+
+        var node: NewNode = test_elem.node(&ports);
+
+        try testing.expectEqualSlices(*const []const u8, &.{ &test_elem.in_one, &test_elem.in_two, &test_elem.in_three }, node.ins());
+    }
 
     pub fn Signal(comptime T: type) type {
         return struct {
@@ -80,107 +145,81 @@ pub const Context = struct {
             }
         }
 
-        // TODO: NEXT: comptime inlets and outlets
-        // pub fn inlets(ptr: *anyopaque) void {
-        //     return getInlets(ConcreteA, ptr);
-        // }
-        //
-        // pub fn outlets(ptr: *anyopaque) void {
-        //     // TK
-        //     _ = ptr;
-        //     return;
-        // }
-
         pub fn node(self: *ConcreteA) Context.Node {
             return .{ .processFn = ConcreteA.process, .ptr = self, .inlet = &self.in, .outlet = &self.out, .id = self.id };
         }
     };
 
-    // @This() to get node struct type
+    // https://zigbin.io/9222cb
+    // shoutouts to Francis on the forums
+    pub fn Ports(comptime T: anytype, comptime S: anytype) type {
+        // Serves as an interface to a concrete class's input and output.
+        // Upstream types must designate which fields are input and output data through
+        // FieldEnums.
 
-    test "getNumPorts" {
-        const node = .{
-            .in_one = "1",
-            .in_two = "2",
-            .in_three = "3",
-            .drive_in = "no",
-            .out_back = "yes",
-            .steak_house = "yum",
-        };
+        // S type designates the expected type for inputs and outputs. For now, all inputs and outputs are expected to
+        // be the same type, because I can't quite figure out how to make lists of heterogeneous pointers work ergonomically at runtime.
+        // eg. how do we provide Signal types that don't care what their Child type is?
 
-        try testing.expectEqual(3, getNumPorts(@TypeOf(node), .in));
-        try testing.expectEqual(1, getNumPorts(@TypeOf(node), .out));
-    }
-
-    const PortDir = enum { in, out };
-    fn getNumPorts(comptime T: anytype, dir: PortDir) comptime_int {
-        const fields = @typeInfo(T).Struct.fields;
-        var count = 0;
-
-        const dir_str = switch (dir) {
-            .in => "in",
-            .out => "out",
-        };
-
-        for (fields) |f| {
-            if (std.mem.startsWith(u8, f.name, dir_str)) {
-                count += 1;
-            }
-        }
-
-        return count;
-    }
-
-    fn Ports(comptime T: anytype, S: anytype) type {
-        const num_in_ports = getNumPorts(T, .in);
-        const num_out_ports = getNumPorts(T, .out);
-
-        // const S = ?Context.Signal(f32);
-
-        const inlet_names: [num_in_ports][]const u8 = comptime blk: {
-            var names: [num_in_ports][]const u8 = .{undefined} ** num_in_ports;
-            const fields = std.meta.fields(T);
-            var idx: usize = 0;
-
-            for (fields) |f| {
-                const name: []const u8 = f.name;
-                if (std.mem.startsWith(u8, name, "in")) {
-                    names[idx] = name;
-                    idx += 1;
-                }
-            }
-
-            break :blk names;
-        };
+        // Placeholder
+        //const S = ?Context.Signal(f32);
 
         return struct {
-            in: [num_in_ports]*S = undefined,
-            out: [num_out_ports]*S = undefined,
+            t: *T,
+            ins: [T.ins.len]*S,
+            outs: [T.outs.len]*S,
 
-            pub fn init(n: *const T) @This() {
-                const in = blk: {
-                    var result: [num_in_ports]*S = .{undefined} ** num_in_ports;
+            const Self = @This();
+            const FE = std.meta.FieldEnum(T);
 
-                    inline for (inlet_names, 0..) |name, idx| {
-                        const offset = @offsetOf(T, name);
-                        result[idx] = @ptrFromInt(@intFromPtr(n) + offset);
+            pub fn init(ptr: *T) Self {
+                const ins: [T.ins.len]*S = blk: {
+                    var result: [T.ins.len]*S = undefined;
+
+                    inline for (T.ins, 0..) |port, idx| {
+                        result[idx] = &@field(ptr, @tagName(port));
                     }
 
                     break :blk result;
                 };
 
-                return .{ .in = in, .out = .{undefined} ** num_out_ports };
+                const outs: [T.outs.len]*S = blk: {
+                    var result: [T.outs.len]*S = undefined;
+
+                    inline for (T.outs, 0..) |port, idx| {
+                        result[idx] = &@field(ptr, @tagName(port));
+                    }
+
+                    break :blk result;
+                };
+
+                return .{ .t = ptr, .ins = ins, .outs = outs };
             }
 
-            fn outlet_offsets() void {
-                std.debug.print("outlets!", .{});
-                return;
+            // assumes all port fields are the same type
+            pub fn inlets(ptr: *anyopaque) []*S {
+                const self: *Self = @ptrCast(@alignCast(ptr));
+                return self.ins[0..];
+            }
+
+            pub fn outlets(ptr: *anyopaque) []*S {
+                const self: *Self = @ptrCast(@alignCast(ptr));
+                return self.outs[0..];
+            }
+
+            pub fn getIn(self: Self, comptime idx: usize) *std.meta.FieldType(T, T.ins[idx]) {
+                return &@field(self.t, @tagName(T.ins[idx]));
+            }
+
+            pub fn getOut(self: Self, comptime idx: usize) *std.meta.FieldType(T, T.outs[idx]) {
+                return &@field(self.t, @tagName(T.outs[idx]));
+            }
+
+            pub fn getPtr(self: Self, comptime fe: FE) *std.meta.FieldType(T, fe) {
+                return &@field(self.t, @tagName(fe));
             }
         };
     }
-
-    // TODO: NEXT: Get filetered field names in comptime, to pull struct offsets at runtime
-    // maybe using @field()????
 
     test "Ports" {
         const PortNode = struct {
@@ -189,13 +228,19 @@ pub const Context = struct {
             in_three: []const u8 = "3",
             drive_in: []const u8 = "no",
             out_back: []const u8 = "yes",
-            steak_house: []const u8 = "yum",
+            steak_house: f32 = 9999.0,
+
+            pub const ins = [_]std.meta.FieldEnum(@This()){ .in_one, .in_two, .in_three };
+            pub const outs = [_]std.meta.FieldEnum(@This()){.out_back};
         };
-        const node = PortNode{};
+        var node = PortNode{};
 
-        const p = Ports(PortNode, []const u8).init(&node);
+        var p = Ports(PortNode, []const u8).init(&node);
 
-        try testing.expectEqualSlices(*const []const u8, &.{ &node.in_one, &node.in_two, &node.in_three }, &p.in);
+        try testing.expectEqualSlices(*const []const u8, &.{ &node.in_one, &node.in_two, &node.in_three }, Ports(PortNode, []const u8).inlets(&p));
+
+        try testing.expectEqual(@TypeOf(p.getPtr(.out_back)), *[]const u8);
+        try testing.expectEqual(@TypeOf(p.getPtr(.steak_house)), *f32);
     }
 
     test "ConcreteA node interface" {
