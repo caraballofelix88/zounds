@@ -8,7 +8,7 @@ const sources = @import("sources/main.zig");
 pub const Context = struct {
     alloc: std.mem.Allocator,
     scratch: []f32,
-    node_list: ?[]*const Context.Node = null,
+    node_list: ?[]*const Context.Node(?Context.Signal(f32)) = null,
     sink: ?Context.Signal(f32) = null,
     sample_rate: u32 = 44_100,
     ticks: u64 = 0,
@@ -28,47 +28,32 @@ pub const Context = struct {
         }
     }
 
-    pub const Node = struct {
-        ptr: *anyopaque,
-        id: []const u8 = "x",
-        processFn: *const fn (*anyopaque) void,
-        inlet: *?Context.Signal(f32),
-        outlet: *?Context.Signal(f32),
+    pub fn Node(comptime S: type) type {
+        return struct {
+            id: []const u8 = "x",
+            ptr: *anyopaque,
+            ports: *anyopaque,
+            processFn: *const fn (*anyopaque) void,
+            inletsFn: *const fn (*anyopaque) []*S,
+            outletsFn: *const fn (*anyopaque) []*S,
 
-        inlets: []*?Context.Signal(f32) = &.{},
-        outlets: []*?Context.Signal(f32) = &.{},
+            const Self = @This();
 
-        pub fn process(n: Context.Node) void {
-            n.processFn(n.ptr);
-        }
-    };
+            pub fn process(self: Self) void {
+                self.processFn(self.ptr);
+            }
 
-    // TODO: NEXT: finish hashing idea for comptime protocol for node
-    pub const NewNode = struct {
-        id: []const u8 = "x",
-        ptr: *anyopaque,
-        ports: *anyopaque,
-        processFn: *const fn (*anyopaque) void,
-        inletsFn: *const fn (*anyopaque) []*S,
-        outletsFn: *const fn (*anyopaque) []*S,
+            pub fn ins(self: Self) []*S {
+                return self.inletsFn(self.ports);
+            }
 
-        const Self = @This();
-        const S = []const u8;
+            pub fn outs(self: Self) []*S {
+                return self.outletsFn(self.ports);
+            }
+        };
+    }
 
-        pub fn process(self: Self) void {
-            self.processFn(self.ptr);
-        }
-
-        pub fn ins(self: Self) []*S {
-            return self.inletsFn(self.ports);
-        }
-
-        pub fn outs(self: Self) []*S {
-            return self.outletsFn(self.ports);
-        }
-    };
-
-    test "NewNode" {
+    test "Node" {
 
         // TODO: Consider alternatives for the interface objects outside of the concrete class
         // Prioritiies:
@@ -92,26 +77,14 @@ pub const Context = struct {
                 _ = ptr;
             }
 
-            pub fn inlets(ports_ptr: *anyopaque) []*SignalType {
-                const ports: *P = @ptrCast(@alignCast(ports_ptr));
-
-                return ports.inlets();
-            }
-
-            pub fn outlets(ports_ptr: *anyopaque) []*SignalType {
-                const ports: *P = @ptrCast(@alignCast(ports_ptr));
-
-                return ports.outlets();
-            }
-
-            pub fn node(self: *Self, ports: *P) NewNode {
+            pub fn node(self: *Self, ports: *P) Context.Node(SignalType) {
                 return .{ .ptr = self, .processFn = &Self.process, .ports = ports, .inletsFn = &P.inlets, .outletsFn = &P.outlets };
             }
         };
         var test_elem: TestStruct = TestStruct{};
         var ports = TestStruct.P.init(&test_elem);
 
-        var node: NewNode = test_elem.node(&ports);
+        var node: Context.Node(TestStruct.SignalType) = test_elem.node(&ports);
 
         try testing.expectEqualSlices(*const []const u8, &.{ &test_elem.in_one, &test_elem.in_two, &test_elem.in_three }, node.ins());
     }
@@ -119,7 +92,7 @@ pub const Context = struct {
     pub fn Signal(comptime T: type) type {
         return struct {
             val: *T,
-            src_node: *const Context.Node, // any kind of node?
+            src_node: *const Context.Node(?Context.Signal(f32)), // any kind of node?
         };
     }
 
@@ -128,6 +101,11 @@ pub const Context = struct {
         id: []const u8 = "ConcreteA",
         in: ?Context.Signal(f32) = null,
         out: ?Context.Signal(f32) = null,
+
+        const SignalType = ?Context.Signal(f32);
+        pub const P = Ports(ConcreteA, SignalType);
+        pub const ins = [_]std.meta.FieldEnum(ConcreteA){.in};
+        pub const outs = [_]std.meta.FieldEnum(ConcreteA){.out};
 
         pub fn process(ptr: *anyopaque) void {
             const n: *Context.ConcreteA = @ptrCast(@alignCast(ptr));
@@ -138,15 +116,22 @@ pub const Context = struct {
                 return;
             }
 
-            if (n.in) |in| {
-                n.out.?.val.* = in.val.* * 5.0;
-            } else {
-                n.out.?.val.* = 5.0;
-            }
+            const in = blk: {
+                if (n.in) |in| {
+                    break :blk in.val.*;
+                }
+                break :blk 1.0;
+            };
+
+            n.out.?.val.* = in * 5.0;
         }
 
-        pub fn node(self: *ConcreteA) Context.Node {
-            return .{ .processFn = ConcreteA.process, .ptr = self, .inlet = &self.in, .outlet = &self.out, .id = self.id };
+        pub fn ports(self: *ConcreteA) P {
+            return P.init(self);
+        }
+
+        pub fn node(self: *ConcreteA, ports_ptr: *P) Context.Node(SignalType) {
+            return .{ .ptr = self, .processFn = &ConcreteA.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets };
         }
     };
 
@@ -248,9 +233,9 @@ pub const Context = struct {
         defer ctx.deinit();
 
         var concrete_a = ConcreteA{ .ctx = &ctx };
-
-        const node = concrete_a.node();
-        const another_node = concrete_a.node();
+        var a_ports = concrete_a.ports();
+        const node = concrete_a.node(&a_ports);
+        const another_node = concrete_a.node(&a_ports);
 
         try testing.expectEqual(node, another_node);
 
@@ -261,7 +246,7 @@ pub const Context = struct {
         try testing.expect(concrete_a.out != null);
 
         // confirm outlet points to same value
-        try testing.expectEqual(node.outlet.*, concrete_a.out);
+        try testing.expectEqual(node.outs()[0], &concrete_a.out);
     }
 
     // TODO: get topologically sorted list of nodes
@@ -269,25 +254,28 @@ pub const Context = struct {
         if (ctx.node_list) |nodes| {
             ctx.alloc.free(nodes);
         }
-        var node_list = std.ArrayList(*const Context.Node).init(ctx.alloc);
+        var node_list = std.ArrayList(*const Context.Node(?Context.Signal(f32))).init(ctx.alloc);
 
         // reversing DFS for now, just to see if this works
-        var curr_node: ?*const Context.Node = ctx.sink.?.src_node;
-        var prev_node: ?*const Context.Node = null;
+        var curr_node: ?*const Context.Node(?Context.Signal((f32))) = ctx.sink.?.src_node;
+        var prev_node: ?*const Context.Node(?Context.Signal(f32)) = null;
 
         while (curr_node) |n| {
             try node_list.append(n);
 
             prev_node = n;
 
-            if (n.inlet.*) |in_signal| {
-                curr_node = in_signal.src_node;
-            } else {
-                curr_node = null;
+            for (n.ins()) |maybe_in| {
+                if (maybe_in.*) |in_signal| {
+                    curr_node = in_signal.src_node;
+                    break;
+                } else {
+                    curr_node = null;
+                }
             }
         }
 
-        std.mem.reverse(*const Context.Node, node_list.items);
+        std.mem.reverse(*const Context.Node(?Context.Signal(f32)), node_list.items);
 
         ctx.node_list = try node_list.toOwnedSlice();
     }
@@ -297,21 +285,25 @@ pub const Context = struct {
         var ctx = try Context.init(testing.allocator_instance.allocator());
         defer ctx.deinit();
 
-        var node_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        const node_a_node = node_a.node();
-        node_a.out = ctx.registerNode(&node_a_node);
+        var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
+        var ports_a = concrete_a.ports();
+        var node_a = concrete_a.node(&ports_a);
 
-        var node_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.out };
-        const node_b_node = node_b.node();
-        node_b.out = ctx.registerNode(&node_b_node);
+        concrete_a.out = ctx.registerNode(&node_a);
 
-        try testing.expect(node_b.out != null);
+        var concrete_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].* };
+        var ports_b = concrete_b.ports();
+        const node_b = concrete_b.node(&ports_b);
 
-        ctx.sink = node_b.out;
+        concrete_b.out = ctx.registerNode(&node_b);
+
+        try testing.expect(node_b.outs()[0].* != null);
+
+        ctx.sink = node_b.outs()[0].*;
 
         try ctx.refreshNodeList();
 
-        try testing.expectEqualSlices(*const Context.Node, &.{ &node_a_node, &node_b_node }, ctx.node_list.?);
+        try testing.expectEqualSlices(*const Context.Node(?Context.Signal(f32)), &.{ &node_a, &node_b }, ctx.node_list.?);
     }
 
     pub fn process(ctx: *Context) void {
@@ -327,47 +319,29 @@ pub const Context = struct {
         var ctx = try Context.init(testing.allocator_instance.allocator());
         defer ctx.deinit();
 
-        var node_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        const node_a_node = node_a.node();
-        node_a.out = ctx.registerNode(&node_a_node);
+        var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
+        var ports_a = concrete_a.ports();
+        const node_a = concrete_a.node(&ports_a);
 
-        var node_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.out };
-        const node_b_node = node_b.node();
-        node_b.out = ctx.registerNode(&node_b_node);
+        concrete_a.out = ctx.registerNode(&node_a);
 
-        ctx.sink = node_b.out;
+        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].* };
+        var ports_b = concrete_b.ports();
+        const node_b = concrete_b.node(&ports_b);
 
-        try ctx.refreshNodeList();
+        concrete_b.out = ctx.registerNode(&node_b);
 
-        ctx.process();
-
-        try testing.expectEqual(5, node_a.out.?.val.*);
-        try testing.expectEqual(10, ctx.sink.?.val.*);
-    }
-
-    test "process_bench" {
-        // about 1ms for 44_100 iterations through braindead graph, doesn't bode well.
-
-        var ctx = try Context.init(testing.allocator_instance.allocator());
-        defer ctx.deinit();
-
-        var node_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        const node_a_node = node_a.node();
-        node_a.out = ctx.registerNode(&node_a_node);
-
-        var node_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.out };
-        const node_b_node = node_b.node();
-        node_b.out = ctx.registerNode(&node_b_node);
-
-        ctx.sink = node_b.out;
+        ctx.sink = node_b.outs()[0].*;
 
         try ctx.refreshNodeList();
 
         ctx.process();
 
-        try testing.expectEqual(5, node_a.out.?.val.*);
+        try testing.expectEqual(5, node_a.outs()[0].*.?.val.*); // TODO: goodness gracious would you look at this nonsense
         try testing.expectEqual(10, ctx.sink.?.val.*);
 
+        // lil mini benchmark
+        // about 1ms for 44_100 iterations through very simple graph, doesn't bode well.
         for (0..44_100) |_| {
             ctx.process();
         }
@@ -384,7 +358,7 @@ pub const Context = struct {
     // TODO: unregistering, i guess
     // TODO: feels jank, maybe, keep thinking about this
     // Reserves space for node output in context scratch
-    pub fn registerNode(ctx: *Context, node: *const Context.Node) Context.Signal(f32) {
+    pub fn registerNode(ctx: *Context, node: *const Context.Node(?Context.Signal(f32))) Context.Signal(f32) {
         // TODO: assert type has process function with compatible signature
 
         const signal: Context.Signal(f32) = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node };
@@ -398,20 +372,24 @@ pub const Context = struct {
     test "registerNode" {
         var ctx = try Context.init(testing.allocator_instance.allocator());
         defer ctx.deinit();
-        var node: ConcreteA = .{ .ctx = &ctx, .id = "test node" };
-        const node_node = node.node();
 
-        node.out = ctx.registerNode(&node_node);
+        var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
+        var ports_a = concrete_a.ports();
+        const node_a = concrete_a.node(&ports_a);
 
-        var node_b: ConcreteA = .{ .ctx = &ctx, .id = "second test node", .in = node.out };
+        concrete_a.out = ctx.registerNode(&node_a);
 
-        const node_b_node = node_b.node();
-        node_b.out = ctx.registerNode(&node_b_node);
+        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].* };
+        var ports_b = concrete_b.ports();
+        const node_b = concrete_b.node(&ports_b);
 
-        node.node().process();
-        node_b.node().process();
+        concrete_b.out = ctx.registerNode(&node_b);
 
-        try testing.expectEqual(25, ctx.scratch[1]);
+        node_a.process(); // x * 5
+        node_b.process(); // in * multi + 5
+
+        try testing.expectEqual(5, ctx.scratch[0]);
+        try testing.expectEqual(10, ctx.scratch[1]);
     }
 
     fn getListAddress(ctx: Context, idx: usize) *f32 {
@@ -433,20 +411,17 @@ pub const Context = struct {
         try testing.expectEqual(5, ctx.scratch[1]);
     }
 
-    // TODO: NEXT: How do we build an interface for node structs?
-    // needs to allow for
-    // - abstract process()
-    // - comptime calculated(?) inlet and outlet tracking
-    // pub fn inlets(node: anytype) void {
-    //     _ = node;
-    // }
-
     pub const ConcreteB = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteB",
         in: ?Context.Signal(f32) = null,
+        multiplier: ?Context.Signal(f32) = null,
         out: ?Context.Signal(f32) = null,
-        _node: ?Context.Node = null,
+
+        const SignalType = ?Context.Signal(f32);
+        pub const P = Ports(ConcreteB, SignalType);
+        pub const ins = [_]std.meta.FieldEnum(ConcreteB){ .in, .multiplier };
+        pub const outs = [_]std.meta.FieldEnum(ConcreteB){.out};
 
         pub fn process(ptr: *anyopaque) void {
             const n: *Context.ConcreteB = @ptrCast(@alignCast(ptr));
@@ -457,15 +432,29 @@ pub const Context = struct {
                 return;
             }
 
-            if (n.in) |in| {
-                n.out.?.val.* = in.val.* + 5.0;
-            } else {
-                n.out.?.val.* = 3.0;
-            }
+            const multi = blk: {
+                if (n.multiplier) |m| {
+                    break :blk m.val.*;
+                }
+                break :blk 1.0;
+            };
+
+            const in = blk: {
+                if (n.in) |in| {
+                    break :blk in.val.*;
+                }
+                break :blk 1.0;
+            };
+
+            n.out.?.val.* = in * multi + 5.0;
         }
 
-        pub fn node(self: *ConcreteB) Context.Node {
-            return .{ .processFn = ConcreteB.process, .ptr = self, .inlet = &self.in, .outlet = &self.out, .id = self.id };
+        pub fn ports(self: *ConcreteB) P {
+            return P.init(self);
+        }
+
+        pub fn node(self: *ConcreteB, ports_ptr: *P) Context.Node(SignalType) {
+            return .{ .ptr = self, .processFn = &ConcreteB.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets };
         }
     };
 };
