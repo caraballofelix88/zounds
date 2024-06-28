@@ -32,6 +32,7 @@ pub const Context = struct {
         ptr: *anyopaque,
         ports: *anyopaque,
         processFn: *const fn (*anyopaque) void,
+        portFn: *const fn (*anyopaque, []const u8) *?Context.Signal,
         inletsFn: *const fn (*anyopaque) []*?Context.Signal,
         outletsFn: *const fn (*anyopaque) []*?Context.Signal,
 
@@ -46,43 +47,16 @@ pub const Context = struct {
         pub fn outs(n: Context.Node) []*?Context.Signal {
             return n.outletsFn(n.ports);
         }
+
+        pub fn port(n: Context.Node, field_name: []const u8) *?Context.Signal {
+            return n.portFn(n.ports, field_name);
+        }
     };
 
-    // test "Node" {
-    //
     //     // TODO: Consider alternatives for the interface objects outside of the concrete class
     //     // Prioritiies:
     //     // - Runtime-performant
     //     // - End-user ergonomics
-    //     const TestStruct = struct {
-    //         in_one: []const u8 = "1",
-    //         in_two: []const u8 = "2",
-    //         in_three: []const u8 = "3",
-    //         drive_in: []const u8 = "no",
-    //         out_back: []const u8 = "yes",
-    //         steak_house: []const u8 = "yum",
-    //
-    //         const Self = @This();
-    //         const ValueType = []const u8;
-    //         pub const P = Ports(Self, ValueType);
-    //         pub const ins = [_]std.meta.FieldEnum(Self){ .in_one, .in_two, .in_three };
-    //         pub const outs = [_]std.meta.FieldEnum(Self){.out_back};
-    //
-    //         pub fn process(ptr: *anyopaque) void {
-    //             _ = ptr;
-    //         }
-    //
-    //         pub fn node(self: *Self, ports: *P) Context.Node(ValueType) {
-    //             return .{ .ptr = self, .processFn = &Self.process, .ports = ports, .inletsFn = &P.inlets, .outletsFn = &P.outlets };
-    //         }
-    //     };
-    //     var test_elem: TestStruct = TestStruct{};
-    //     var ports = TestStruct.P.init(&test_elem);
-    //
-    //     var node: Context.Node(TestStruct.ValueType) = test_elem.node(&ports);
-    //
-    //     try testing.expectEqualSlices(*const []const u8, &.{ &test_elem.in_one, &test_elem.in_two, &test_elem.in_three }, node.ins());
-    // }
 
     pub const Signal = struct {
         val: *f32,
@@ -126,12 +100,37 @@ pub const Context = struct {
         }
 
         pub fn node(self: *ConcreteA, ports_ptr: *P) Context.Node {
-            return .{ .ptr = self, .processFn = &ConcreteA.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets };
+            return .{ .ptr = self, .processFn = &ConcreteA.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets, .portFn = &P.get };
+        }
+    };
+
+    pub const ConcreteSink = struct {
+        ctx: *Context,
+        id: []const u8 = "ConcreteSink",
+        ins: std.ArrayList(?Context.Signal) = null,
+        out: ?Context.Signal = null,
+
+        pub fn process(ptr: *anyopaque) void {
+            const sink: *ConcreteSink = @ptrCast(@alignCast(ptr));
+
+            var result: f32 = undefined;
+            var input_count: u8 = 0;
+
+            for (sink.ins.items) |maybe_in| {
+                if (maybe_in) |in| {
+                    result += in.val.*;
+                    input_count += 1;
+                }
+            }
+
+            result /= @min(input_count, 1);
         }
     };
 
     // https://zigbin.io/9222cb
     // shoutouts to Francis on the forums
+
+    //TODO: dynamic ports, with arraylist ins and outs as a new class
     pub fn Ports(comptime T: anytype, comptime S: anytype) type {
         // Serves as an interface to a concrete class's input and output.
         // Upstream types must designate which fields are input and output data through
@@ -152,6 +151,7 @@ pub const Context = struct {
             const Self = @This();
             const FE = std.meta.FieldEnum(T);
 
+            // TODO: do away with init, find a way to eliminate state inside Port, not useful
             pub fn init(ptr: *T) Self {
                 const ins: [T.ins.len]*S = blk: {
                     var result: [T.ins.len]*S = undefined;
@@ -185,6 +185,24 @@ pub const Context = struct {
             pub fn outlets(ptr: *anyopaque) []*S {
                 const self: *Self = @ptrCast(@alignCast(ptr));
                 return self.outs[0..];
+            }
+
+            pub fn get(ptr: *anyopaque, field_str: []const u8) *S {
+                const self: *Self = @ptrCast(@alignCast(ptr));
+
+                inline for (T.ins) |in| {
+                    if (std.mem.eql(u8, @tagName(in), field_str)) {
+                        return &@field(self.t, @tagName(in));
+                    }
+                }
+
+                inline for (T.outs) |out| {
+                    if (std.mem.eql(u8, @tagName(out), field_str)) {
+                        return &@field(self.t, @tagName(out));
+                    }
+                }
+
+                unreachable;
             }
 
             pub fn getIn(self: Self, comptime idx: usize) *std.meta.FieldType(T, T.ins[idx]) {
@@ -221,6 +239,11 @@ pub const Context = struct {
 
         try testing.expectEqual(@TypeOf(p.getPtr(.out_back)), *[]const u8);
         try testing.expectEqual(@TypeOf(p.getPtr(.steak_house)), *f32);
+
+        const in_two = @TypeOf(p).get(&p, "in_two");
+        in_two.* = @TypeOf(p).getOut(p, 0).*;
+
+        try testing.expectEqual(p.getPtr(.in_two).*, p.getPtr(.out_back).*);
     }
 
     test "ConcreteA node interface" {
@@ -242,6 +265,12 @@ pub const Context = struct {
 
         // confirm outlet points to same value
         try testing.expectEqual(node.outs()[0], &concrete_a.out);
+
+        // test assignment
+        node.port("out").* = .{
+            .val = @as(*f32, @ptrFromInt(0xDEADBEEF + 1)),
+            .src_node = &node,
+        };
     }
 
     // TODO: get topologically sorted list of nodes
@@ -333,13 +362,13 @@ pub const Context = struct {
 
         oscillator.out = ctx.registerNode(&osc_node);
 
-        ctx.sink = osc_node.outs()[0].*;
+        ctx.sink = osc_node.port("out").*;
 
         try ctx.refreshNodeList();
 
         ctx.process();
 
-        try testing.expectEqual(5, node_a.outs()[0].*.?.val.*); // TODO: goodness gracious would you look at this nonsense
+        try testing.expectEqual(5, node_a.port("out").*.?.val.*); // TODO: goodness gracious would you look at this nonsense
         try testing.expectEqual(0, ctx.sink.?.val.*);
 
         // lil mini benchmark
@@ -456,7 +485,7 @@ pub const Context = struct {
         }
 
         pub fn node(self: *ConcreteB, ports_ptr: *P) Context.Node {
-            return .{ .ptr = self, .processFn = &ConcreteB.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets };
+            return .{ .ptr = self, .processFn = &ConcreteB.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets, .portFn = &P.get };
         }
     };
 
@@ -516,7 +545,7 @@ pub const Context = struct {
         }
 
         pub fn node(self: *Oscillator, ports_ptr: *P) Context.Node {
-            return .{ .ptr = self, .processFn = &Oscillator.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets };
+            return .{ .ptr = self, .processFn = &Oscillator.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets, .portFn = &P.get };
         }
     };
 };

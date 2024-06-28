@@ -30,10 +30,9 @@ pub const Context = struct {
             // TODO: iterate through list of available backends if not specified
         };
 
-        return .{
-            .alloc = allocator,
-            .backend = backend_ctx,
-        };
+        const signal_ctx: signals.Context = try signals.Context.init(allocator);
+
+        return .{ .alloc = allocator, .backend = backend_ctx, .signal = signal_ctx };
     }
 
     pub inline fn deinit(ctx: *Context) void {
