@@ -27,29 +27,65 @@ pub const Context = struct {
             ctx.alloc.free(list);
         }
     }
+
+    pub fn Let(T: type) type {
+        return union(enum) {
+            single: *T,
+            list: *std.ArrayList(T),
+
+            const Self = @This();
+
+            pub fn get(s: Self, idx: ?usize) *T {
+                const n = idx orelse 0;
+                return switch (s) {
+                    .single => |val| val,
+                    .list => |list| &list.items[n],
+                };
+            }
+        };
+    }
+
     pub const Node = struct {
         id: []const u8 = "x",
+        inlet_buf: [8]Portlet = undefined,
+        outlet_buf: [8]Portlet = undefined,
         ptr: *anyopaque,
-        ports: *anyopaque,
+        // ports: *anyopaque = @ptrFromInt(0xDEADBEEF),
         processFn: *const fn (*anyopaque) void,
-        portFn: *const fn (*anyopaque, []const u8) *?Context.Signal,
-        inletsFn: *const fn (*anyopaque) []*?Context.Signal,
-        outletsFn: *const fn (*anyopaque) []*?Context.Signal,
+        portLetFn: *const fn (*anyopaque, []const u8) Portlet,
+        // inletsFn: *const fn (*anyopaque) []*?Context.Signal,
+        // outletsFn: *const fn (*anyopaque) []*?Context.Signal,
+        z_inletsFn: *const fn (*anyopaque, []Portlet) []Portlet,
+        z_outletsFn: *const fn (*anyopaque, []Portlet) []Portlet,
+
+        const Portlet = Let(?Context.Signal);
 
         pub fn process(n: Context.Node) void {
             n.processFn(n.ptr);
         }
 
-        pub fn ins(n: Context.Node) []*?Context.Signal {
-            return n.inletsFn(n.ports);
+        // pub fn ins(n: Context.Node) []*?Context.Signal {
+        //     return n.inletsFn(n.ports);
+        // }
+
+        pub fn in_lets(n: *Context.Node) []Portlet {
+            return n.z_inletsFn(n.ptr, &n.inlet_buf);
         }
 
-        pub fn outs(n: Context.Node) []*?Context.Signal {
-            return n.outletsFn(n.ports);
+        // pub fn outs(n: Context.Node) []*?Context.Signal {
+        //     return n.outletsFn(n.ports);
+        // }
+
+        pub fn out_lets(n: *Context.Node) []Portlet {
+            return n.z_outletsFn(n.ptr, &n.outlet_buf);
         }
 
-        pub fn port(n: Context.Node, field_name: []const u8) *?Context.Signal {
-            return n.portFn(n.ports, field_name);
+        // pub fn port(n: Context.Node, field_name: []const u8) *?Context.Signal {
+        //     return n.portFn(n.ptr, field_name);
+        // }
+
+        pub fn port_lets(n: Context.Node, field_name: []const u8) Portlet {
+            return n.portLetFn(n.ptr, field_name);
         }
     };
 
@@ -60,7 +96,7 @@ pub const Context = struct {
 
     pub const Signal = struct {
         val: *f32,
-        src_node: *const Context.Node,
+        src_node: *Context.Node,
         pub fn get(s: *@This()) f32 {
             return s.val.*;
         }
@@ -95,69 +131,164 @@ pub const Context = struct {
             n.out.?.val.* = in * 5.0;
         }
 
-        pub fn ports(self: *ConcreteA) P {
-            return P.init(self);
-        }
-
-        pub fn node(self: *ConcreteA, ports_ptr: *P) Context.Node {
-            return .{ .ptr = self, .processFn = &ConcreteA.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets, .portFn = &P.get };
+        pub fn node(self: *ConcreteA) Context.Node {
+            return .{
+                .ptr = self,
+                .processFn = &ConcreteA.process,
+                // .ports = ports_ptr,
+                // .inletsFn = &P.inlets,
+                // .outletsFn = &P.outlets,
+                .portLetFn = &P.get_let,
+                .z_outletsFn = &P.zOutlets,
+                .z_inletsFn = &P.zInlets,
+            };
         }
     };
 
     pub const ConcreteSink = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteSink",
-        ins: std.ArrayList(?Context.Signal) = null,
+        inputs: std.ArrayList(?Context.Signal),
         out: ?Context.Signal = null,
+
+        const P = Ports(ConcreteSink, ?Context.Signal);
+        pub const ins = [_]std.meta.FieldEnum(ConcreteSink){.inputs};
+        pub const outs = [_]std.meta.FieldEnum(ConcreteSink){.out};
+
+        // use ctx.alloc for now
+        pub fn init(ctx: *Context) !ConcreteSink {
+            const inputs = std.ArrayList(?Context.Signal).init(ctx.alloc);
+            return .{
+                .ctx = ctx,
+                .inputs = inputs,
+            };
+        }
+
+        pub fn deinit(self: *ConcreteSink) void {
+            self.inputs.deinit();
+        }
 
         pub fn process(ptr: *anyopaque) void {
             const sink: *ConcreteSink = @ptrCast(@alignCast(ptr));
 
+            if (sink.out == null) {
+                std.debug.print("uh oh, fix", .{});
+            }
+
             var result: f32 = undefined;
             var input_count: u8 = 0;
 
-            for (sink.ins.items) |maybe_in| {
+            for (sink.inputs.items) |maybe_in| {
                 if (maybe_in) |in| {
                     result += in.val.*;
                     input_count += 1;
                 }
             }
 
-            result /= @min(input_count, 1);
+            result /= @floatFromInt(@max(input_count, 1));
+            sink.out.?.val.* = result;
+        }
+
+        pub fn node(self: *ConcreteSink) Context.Node {
+            return .{
+                .ptr = self,
+                .processFn = &ConcreteSink.process,
+                //.inletsFn = &P.inlets,
+                //.outletsFn = &P.outlets,
+                //.portFn = &P.get,
+                .portLetFn = &P.get_let,
+                .z_outletsFn = &P.zOutlets,
+                .z_inletsFn = &P.zInlets,
+            };
         }
     };
+
+    test "sink node" {
+        var ctx = try Context.init(testing.allocator_instance.allocator());
+        defer ctx.deinit();
+
+        var sink = try ConcreteSink.init(&ctx);
+        defer sink.deinit();
+        var sink_node = sink.node();
+
+        _ = ctx.registerNode(&sink_node);
+
+        // std.debug.print("sink_node.out: {?}\n", .{sink.out});
+
+        try testing.expect(sink.out != null);
+
+        var concrete_a = ConcreteA{ .ctx = &ctx };
+        var a_node = concrete_a.node();
+
+        var a: f32 = 1.0;
+        var b: f32 = 3.0;
+        var c: f32 = 8.0;
+        try sink.inputs.append(.{ .val = &a, .src_node = &a_node });
+        try sink.inputs.append(.{ .val = &b, .src_node = &a_node });
+        try sink.inputs.append(.{ .val = &c, .src_node = &a_node });
+
+        // confirm outlet points to same value
+        try testing.expectEqual(sink_node.out_lets()[0].single, &sink.out);
+
+        sink_node.process();
+
+        try testing.expectEqual(4.0, sink_node.out_lets()[0].single.*.?.val.*);
+    }
 
     // https://zigbin.io/9222cb
     // shoutouts to Francis on the forums
 
-    //TODO: dynamic ports, with arraylist ins and outs as a new class
     pub fn Ports(comptime T: anytype, comptime S: anytype) type {
         // Serves as an interface to a concrete class's input and output.
         // Upstream types must designate which fields are input and output data through
-        // FieldEnums.
+        // FieldEnum arrays.
 
         // S type designates the expected type for inputs and outputs. For now, all inputs and outputs are expected to
         // be the same type, because I can't quite figure out how to make lists of heterogeneous pointers work ergonomically at runtime.
         // eg. how do we provide Signal types that don't care what their Child type is?
+        // idea: Signals as union types, like before
 
         // Placeholder
         //const S = ?Context.Signal(f32);
+
+        const L = Let(S);
 
         return struct {
             t: *T,
             ins: [T.ins.len]*S,
             outs: [T.outs.len]*S,
+            in_lets: [T.ins.len]L,
+            out_lets: [T.outs.len]L,
+
+            pub const num_ins = T.ins.len;
+            pub const num_outs = T.outs.len;
 
             const Self = @This();
             const FE = std.meta.FieldEnum(T);
 
-            // TODO: do away with init, find a way to eliminate state inside Port, not useful
+            // TODO: do away with init, find a way to eliminate state inside Port, is it useful?
             pub fn init(ptr: *T) Self {
                 const ins: [T.ins.len]*S = blk: {
                     var result: [T.ins.len]*S = undefined;
 
                     inline for (T.ins, 0..) |port, idx| {
                         result[idx] = &@field(ptr, @tagName(port));
+                    }
+
+                    break :blk result;
+                };
+
+                const in_lets: [T.ins.len]L = blk: {
+                    var result: [T.ins.len]L = undefined;
+
+                    inline for (T.ins, 0..) |port, idx| {
+                        const field_ptr = &@field(ptr, @tagName(port));
+                        result[idx] = switch (std.meta.FieldType(T, port)) {
+                            S => .{ .single = field_ptr },
+                            std.ArrayList(S) => .{ .list = field_ptr },
+                            else => unreachable,
+                        };
+                        //result[idx] = &@field(ptr, @tagName(port));
                     }
 
                     break :blk result;
@@ -173,7 +304,22 @@ pub const Context = struct {
                     break :blk result;
                 };
 
-                return .{ .t = ptr, .ins = ins, .outs = outs };
+                const out_lets: [T.outs.len]L = blk: {
+                    var result: [T.outs.len]L = undefined;
+
+                    inline for (T.outs, 0..) |port, idx| {
+                        const field_ptr = &@field(ptr, @tagName(port));
+                        result[idx] = switch (std.meta.FieldType(T, port)) {
+                            S => .{ .single = field_ptr },
+                            std.ArrayList(S) => .{ .list = field_ptr },
+                            else => unreachable,
+                        };
+                    }
+
+                    break :blk result;
+                };
+
+                return .{ .t = ptr, .ins = ins, .in_lets = in_lets, .outs = outs, .out_lets = out_lets };
             }
 
             // assumes all port fields are the same type
@@ -182,23 +328,84 @@ pub const Context = struct {
                 return self.ins[0..];
             }
 
+            // idea for accessing array of in/outlets directly, w/o Ports instance
+            pub fn zInlets(ptr: *anyopaque, buf: []L) []L {
+                var t: *T = @ptrCast(@alignCast(ptr));
+
+                inline for (T.ins, 0..) |port, idx| {
+                    const field_ptr = &@field(t, @tagName(port));
+                    buf[idx] = switch (std.meta.FieldType(T, port)) {
+                        S => .{ .single = field_ptr },
+                        std.ArrayList(S) => .{ .list = field_ptr },
+                        else => unreachable,
+                    };
+                }
+
+                return buf[0..T.ins.len];
+            }
+
             pub fn outlets(ptr: *anyopaque) []*S {
                 const self: *Self = @ptrCast(@alignCast(ptr));
                 return self.outs[0..];
             }
 
-            pub fn get(ptr: *anyopaque, field_str: []const u8) *S {
-                const self: *Self = @ptrCast(@alignCast(ptr));
+            pub fn zOutlets(ptr: *anyopaque, buf: []L) []L {
+                var t: *T = @ptrCast(@alignCast(ptr));
+
+                inline for (T.outs, 0..) |port, idx| {
+                    const field_ptr = &@field(t, @tagName(port));
+                    buf[idx] = switch (std.meta.FieldType(T, port)) {
+                        S => .{ .single = field_ptr },
+                        std.ArrayList(S) => .{ .list = field_ptr },
+                        else => unreachable,
+                    };
+                }
+
+                return buf[0..T.outs.len];
+            }
+
+            // pub fn get(ptr: *anyopaque, field_str: []const u8) *S {
+            //     const t: *T = @ptrCast(@alignCast(ptr));
+            //
+            //     inline for (T.ins) |in| {
+            //         if (std.mem.eql(u8, @tagName(in), field_str)) {
+            //             return &@field(t, @tagName(in));
+            //         }
+            //     }
+            //
+            //     inline for (T.outs) |out| {
+            //         if (std.mem.eql(u8, @tagName(out), field_str)) {
+            //             return &@field(t, @tagName(out));
+            //         }
+            //     }
+            //
+            //     unreachable;
+            // }
+
+            pub fn get_let(ptr: *anyopaque, field_str: []const u8) L {
+                const t: *T = @ptrCast(@alignCast(ptr));
 
                 inline for (T.ins) |in| {
                     if (std.mem.eql(u8, @tagName(in), field_str)) {
-                        return &@field(self.t, @tagName(in));
+                        const field_ptr = &@field(t, @tagName(in));
+
+                        return switch (std.meta.FieldType(T, in)) {
+                            S => .{ .single = field_ptr },
+                            std.ArrayList(S) => .{ .list = field_ptr },
+                            else => unreachable,
+                        };
                     }
                 }
 
                 inline for (T.outs) |out| {
                     if (std.mem.eql(u8, @tagName(out), field_str)) {
-                        return &@field(self.t, @tagName(out));
+                        const field_ptr = &@field(t, @tagName(out));
+
+                        return switch (std.meta.FieldType(T, out)) {
+                            S => .{ .single = field_ptr },
+                            std.ArrayList(S) => .{ .list = field_ptr },
+                            else => unreachable,
+                        };
                     }
                 }
 
@@ -240,8 +447,8 @@ pub const Context = struct {
         try testing.expectEqual(@TypeOf(p.getPtr(.out_back)), *[]const u8);
         try testing.expectEqual(@TypeOf(p.getPtr(.steak_house)), *f32);
 
-        const in_two = @TypeOf(p).get(&p, "in_two");
-        in_two.* = @TypeOf(p).getOut(p, 0).*;
+        const in_two = @TypeOf(p).get_let(&node, "in_two");
+        in_two.single.* = @TypeOf(p).getOut(p, 0).*;
 
         try testing.expectEqual(p.getPtr(.in_two).*, p.getPtr(.out_back).*);
     }
@@ -251,23 +458,17 @@ pub const Context = struct {
         defer ctx.deinit();
 
         var concrete_a = ConcreteA{ .ctx = &ctx };
-        var a_ports = concrete_a.ports();
-        const node = concrete_a.node(&a_ports);
-        const another_node = concrete_a.node(&a_ports);
-
-        try testing.expectEqual(node, another_node);
+        var node = concrete_a.node();
 
         concrete_a.out = ctx.registerNode(&node);
-
-        std.debug.print("concrete_a.out: {?}\n", .{concrete_a.out});
 
         try testing.expect(concrete_a.out != null);
 
         // confirm outlet points to same value
-        try testing.expectEqual(node.outs()[0], &concrete_a.out);
+        try testing.expectEqual(node.out_lets()[0].single, &concrete_a.out);
 
         // test assignment
-        node.port("out").* = .{
+        node.port_lets("out").single.* = .{
             .val = @as(*f32, @ptrFromInt(0xDEADBEEF + 1)),
             .src_node = &node,
         };
@@ -278,23 +479,38 @@ pub const Context = struct {
         if (ctx.node_list) |nodes| {
             ctx.alloc.free(nodes);
         }
-        var node_list = std.ArrayList(*const Context.Node).init(ctx.alloc);
+        var node_list = std.ArrayList(*Context.Node).init(ctx.alloc);
 
         // reversing DFS for now, just to see if this works
-        var curr_node: ?*const Context.Node = ctx.sink.?.src_node;
-        var prev_node: ?*const Context.Node = null;
+        var curr_node: ?*Context.Node = ctx.sink.?.src_node;
+        var prev_node: ?*Context.Node = null;
 
         while (curr_node) |n| {
             try node_list.append(n);
 
             prev_node = n;
 
-            for (n.ins()) |maybe_in| {
-                if (maybe_in.*) |in_signal| {
-                    curr_node = in_signal.src_node;
-                    break;
-                } else {
-                    curr_node = null;
+            for (n.in_lets()) |let| {
+                switch (let) {
+                    .single => |maybe_in| {
+                        if (maybe_in.*) |in_signal| {
+                            curr_node = in_signal.src_node;
+                            break;
+                        } else {
+                            curr_node = null;
+                        }
+                    },
+                    .list => |list| {
+                        for (list.items) |maybe_sig| {
+                            if (maybe_sig) |sig| {
+                                // check for node presence before slapping onto node list
+                                if (!std.mem.containsAtLeast(*Context.Node, node_list.items, 1, &.{sig.src_node})) {
+                                    try node_list.append(sig.src_node);
+                                }
+                                curr_node = null;
+                            }
+                        }
+                    },
                 }
             }
         }
@@ -310,20 +526,18 @@ pub const Context = struct {
         defer ctx.deinit();
 
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        var ports_a = concrete_a.ports();
-        var node_a = concrete_a.node(&ports_a);
+        var node_a = concrete_a.node();
 
-        concrete_a.out = ctx.registerNode(&node_a);
+        _ = ctx.registerNode(&node_a);
 
-        var concrete_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].* };
-        var ports_b = concrete_b.ports();
-        const node_b = concrete_b.node(&ports_b);
+        var concrete_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.out_lets()[0].single.* };
+        var node_b = concrete_b.node();
 
         concrete_b.out = ctx.registerNode(&node_b);
 
-        try testing.expect(node_b.outs()[0].* != null);
+        try testing.expect(node_b.out_lets()[0].single.* != null);
 
-        ctx.sink = node_b.outs()[0].*;
+        ctx.sink = node_b.out_lets()[0].single.*;
 
         try ctx.refreshNodeList();
 
@@ -345,31 +559,39 @@ pub const Context = struct {
         defer ctx.deinit();
 
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        var ports_a = concrete_a.ports();
-        const node_a = concrete_a.node(&ports_a);
+        var node_a = concrete_a.node();
 
-        concrete_a.out = ctx.registerNode(&node_a);
+        _ = ctx.registerNode(&node_a);
 
-        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].* };
-        var ports_b = concrete_b.ports();
-        const node_b = concrete_b.node(&ports_b);
+        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.out_lets()[0].single.* };
+        var node_b = concrete_b.node();
 
-        concrete_b.out = ctx.registerNode(&node_b);
+        _ = ctx.registerNode(&node_b);
 
-        var oscillator = Context.Oscillator{ .ctx = &ctx, .pitch = node_b.outs()[0].*, .amp = node_a.outs()[0].* };
-        var osc_ports = oscillator.ports();
-        const osc_node = oscillator.node(&osc_ports);
+        var oscillator = Context.Oscillator{ .ctx = &ctx, .pitch = node_b.out_lets()[0].single.*, .amp = node_a.out_lets()[0].single.* };
+        var osc_node = oscillator.node();
 
-        oscillator.out = ctx.registerNode(&osc_node);
+        _ = ctx.registerNode(&osc_node);
 
-        ctx.sink = osc_node.port("out").*;
+        var sink = try Context.ConcreteSink.init(&ctx);
+        defer sink.deinit();
+
+        var sink_node = sink.node();
+
+        try sink.inputs.append(concrete_a.out);
+        try sink.inputs.append(concrete_b.out);
+        try sink.inputs.append(oscillator.out);
+
+        _ = ctx.registerNode(&sink_node);
+
+        ctx.sink = sink_node.port_lets("out").single.*;
 
         try ctx.refreshNodeList();
 
         ctx.process();
 
-        try testing.expectEqual(5, node_a.port("out").*.?.val.*); // TODO: goodness gracious would you look at this nonsense
-        try testing.expectEqual(0, ctx.sink.?.val.*);
+        try testing.expectEqual(5, node_a.port_lets("out").single.*.?.val.*); // TODO: goodness gracious would you look at this nonsense
+        try testing.expectEqual(3.33333333, ctx.sink.?.val.*);
 
         // lil mini benchmark
         // about 1ms for 44_100 iterations through very simple graph, doesn't bode well.
@@ -389,14 +611,14 @@ pub const Context = struct {
     // TODO: unregistering, i guess
     // TODO: feels jank, maybe, keep thinking about this
     // Reserves space for node output in context scratch
-    pub fn registerNode(ctx: *Context, node: *const Context.Node) Context.Signal {
+    pub fn registerNode(ctx: *Context, node: *Context.Node) Context.Signal {
         // TODO: assert type has process function with compatible signature
 
         const signal: Context.Signal = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node };
 
         ctx.node_count += 1;
 
-        // node.out = signal;
+        node.out_lets()[0].single.* = signal;
         return signal;
     }
 
@@ -405,14 +627,12 @@ pub const Context = struct {
         defer ctx.deinit();
 
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        var ports_a = concrete_a.ports();
-        const node_a = concrete_a.node(&ports_a);
+        var node_a = concrete_a.node();
 
-        concrete_a.out = ctx.registerNode(&node_a);
+        _ = ctx.registerNode(&node_a);
 
-        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].* };
-        var ports_b = concrete_b.ports();
-        const node_b = concrete_b.node(&ports_b);
+        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.out_lets()[0].single.* };
+        var node_b = concrete_b.node();
 
         concrete_b.out = ctx.registerNode(&node_b);
 
@@ -480,12 +700,18 @@ pub const Context = struct {
             n.out.?.val.* = in * multi + 5.0;
         }
 
-        pub fn ports(self: *ConcreteB) P {
-            return P.init(self);
-        }
-
-        pub fn node(self: *ConcreteB, ports_ptr: *P) Context.Node {
-            return .{ .ptr = self, .processFn = &ConcreteB.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets, .portFn = &P.get };
+        pub fn node(self: *ConcreteB) Context.Node {
+            return .{
+                .ptr = self,
+                .processFn = &ConcreteB.process,
+                //.ports = ports_ptr,
+                //.inletsFn = &P.inlets,
+                //.outletsFn = &P.outlets,
+                //.portFn = &P.get,
+                .portLetFn = &P.get_let,
+                .z_outletsFn = &P.zOutlets,
+                .z_inletsFn = &P.zInlets,
+            };
         }
     };
 
@@ -540,12 +766,18 @@ pub const Context = struct {
             n.out.?.val.* = result;
         }
 
-        pub fn ports(self: *Oscillator) P {
-            return P.init(self);
-        }
-
-        pub fn node(self: *Oscillator, ports_ptr: *P) Context.Node {
-            return .{ .ptr = self, .processFn = &Oscillator.process, .ports = ports_ptr, .inletsFn = &P.inlets, .outletsFn = &P.outlets, .portFn = &P.get };
+        pub fn node(self: *Oscillator) Context.Node {
+            return .{
+                .ptr = self,
+                .processFn = &Oscillator.process,
+                //.ports = ports_ptr,
+                // .inletsFn = &P.inlets,
+                // .outletsFn = &P.outlets,
+                // .portFn = &P.get,
+                .portLetFn = &P.get_let,
+                .z_outletsFn = &P.zOutlets,
+                .z_inletsFn = &P.zInlets,
+            };
         }
     };
 };
