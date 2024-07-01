@@ -8,7 +8,7 @@ const sources = @import("sources/main.zig");
 pub const Context = struct {
     alloc: std.mem.Allocator,
     scratch: []f32,
-    node_list: ?[]*const Context.Node = null,
+    node_list: ?[]*Context.Node = null, // why is this optional lol
     sink: ?Context.Signal = null, // should be ptr?
     sample_rate: u32 = 44_100,
     ticks: u64 = 0,
@@ -47,52 +47,64 @@ pub const Context = struct {
 
     pub const Node = struct {
         id: []const u8 = "x",
-        inlet_buf: [8]Portlet = undefined,
-        outlet_buf: [8]Portlet = undefined,
+        num_inlets: u8 = undefined,
+        num_outlets: u8 = undefined,
+        inlets: [8]Portlet = undefined,
+        outlets: [8]Portlet = undefined,
         ptr: *anyopaque,
-        // ports: *anyopaque = @ptrFromInt(0xDEADBEEF),
         processFn: *const fn (*anyopaque) void,
-        portLetFn: *const fn (*anyopaque, []const u8) Portlet,
-        // inletsFn: *const fn (*anyopaque) []*?Context.Signal,
-        // outletsFn: *const fn (*anyopaque) []*?Context.Signal,
-        z_inletsFn: *const fn (*anyopaque, []Portlet) []Portlet,
-        z_outletsFn: *const fn (*anyopaque, []Portlet) []Portlet,
+        portletFn: *const fn (*anyopaque, []const u8) Portlet,
 
         const Portlet = Let(?Context.Signal);
+
+        pub fn init(ptr: *anyopaque, T: type) Context.Node {
+            const concrete: *T = @ptrCast(@alignCast(ptr));
+            const P = Ports(T, ?Context.Signal);
+            var node: Context.Node = .{
+                .ptr = ptr,
+                .id = concrete.id,
+                .processFn = &T.process,
+                .portletFn = &P.get,
+            };
+
+            const p_ins = P.ins(ptr);
+            const p_outs = P.outs(ptr);
+
+            node.num_inlets = p_ins.len;
+            node.num_outlets = p_outs.len;
+
+            std.mem.copyForwards(Portlet, node.inlets[0..], p_ins[0..]);
+            std.mem.copyForwards(Portlet, node.outlets[0..], p_outs[0..]);
+
+            return node;
+        }
 
         pub fn process(n: Context.Node) void {
             n.processFn(n.ptr);
         }
 
-        // pub fn ins(n: Context.Node) []*?Context.Signal {
-        //     return n.inletsFn(n.ports);
-        // }
-
-        pub fn in_lets(n: *Context.Node) []Portlet {
-            return n.z_inletsFn(n.ptr, &n.inlet_buf);
+        pub fn ins(n: *Context.Node) []Portlet {
+            return n.inlets[0..n.num_inlets];
         }
 
-        // pub fn outs(n: Context.Node) []*?Context.Signal {
-        //     return n.outletsFn(n.ports);
-        // }
-
-        pub fn out_lets(n: *Context.Node) []Portlet {
-            return n.z_outletsFn(n.ptr, &n.outlet_buf);
+        pub fn in(n: Context.Node, idx: usize) Portlet {
+            // assert idx no greater than inlet count
+            return n.inlets[idx];
         }
 
-        // pub fn port(n: Context.Node, field_name: []const u8) *?Context.Signal {
-        //     return n.portFn(n.ptr, field_name);
-        // }
+        pub fn out(n: Context.Node, idx: usize) Portlet {
+            // assert idx no greater than inlet count
+            return n.outlets[idx];
+        }
 
-        pub fn port_lets(n: Context.Node, field_name: []const u8) Portlet {
-            return n.portLetFn(n.ptr, field_name);
+        pub fn outs(n: *Context.Node) []Portlet {
+            return n.outlets[0..n.num_outlets];
+        }
+
+        pub fn port(n: Context.Node, field_name: []const u8) Portlet {
+            return n.portletFn(n.ptr, field_name);
         }
     };
-
-    //     // TODO: Consider alternatives for the interface objects outside of the concrete class
-    //     // Prioritiies:
-    //     // - Runtime-performant
-    //     // - End-user ergonomics
 
     pub const Signal = struct {
         val: *f32,
@@ -132,16 +144,7 @@ pub const Context = struct {
         }
 
         pub fn node(self: *ConcreteA) Context.Node {
-            return .{
-                .ptr = self,
-                .processFn = &ConcreteA.process,
-                // .ports = ports_ptr,
-                // .inletsFn = &P.inlets,
-                // .outletsFn = &P.outlets,
-                .portLetFn = &P.get_let,
-                .z_outletsFn = &P.zOutlets,
-                .z_inletsFn = &P.zInlets,
-            };
+            return Context.Node.init(self, ConcreteA);
         }
     };
 
@@ -190,16 +193,7 @@ pub const Context = struct {
         }
 
         pub fn node(self: *ConcreteSink) Context.Node {
-            return .{
-                .ptr = self,
-                .processFn = &ConcreteSink.process,
-                //.inletsFn = &P.inlets,
-                //.outletsFn = &P.outlets,
-                //.portFn = &P.get,
-                .portLetFn = &P.get_let,
-                .z_outletsFn = &P.zOutlets,
-                .z_inletsFn = &P.zInlets,
-            };
+            return Context.Node.init(self, ConcreteSink);
         }
     };
 
@@ -212,8 +206,6 @@ pub const Context = struct {
         var sink_node = sink.node();
 
         _ = ctx.registerNode(&sink_node);
-
-        // std.debug.print("sink_node.out: {?}\n", .{sink.out});
 
         try testing.expect(sink.out != null);
 
@@ -228,11 +220,11 @@ pub const Context = struct {
         try sink.inputs.append(.{ .val = &c, .src_node = &a_node });
 
         // confirm outlet points to same value
-        try testing.expectEqual(sink_node.out_lets()[0].single, &sink.out);
+        try testing.expectEqual(sink_node.outs()[0].single, &sink.out);
 
         sink_node.process();
 
-        try testing.expectEqual(4.0, sink_node.out_lets()[0].single.*.?.val.*);
+        try testing.expectEqual(4.0, sink_node.outs()[0].single.*.?.val.*);
     }
 
     // https://zigbin.io/9222cb
@@ -251,86 +243,16 @@ pub const Context = struct {
         // Placeholder
         //const S = ?Context.Signal(f32);
 
-        const L = Let(S);
-
         return struct {
             t: *T,
-            ins: [T.ins.len]*S,
-            outs: [T.outs.len]*S,
-            in_lets: [T.ins.len]L,
-            out_lets: [T.outs.len]L,
-
-            pub const num_ins = T.ins.len;
-            pub const num_outs = T.outs.len;
 
             const Self = @This();
             const FE = std.meta.FieldEnum(T);
+            pub const L = Let(S);
 
-            // TODO: do away with init, find a way to eliminate state inside Port, is it useful?
-            pub fn init(ptr: *T) Self {
-                const ins: [T.ins.len]*S = blk: {
-                    var result: [T.ins.len]*S = undefined;
-
-                    inline for (T.ins, 0..) |port, idx| {
-                        result[idx] = &@field(ptr, @tagName(port));
-                    }
-
-                    break :blk result;
-                };
-
-                const in_lets: [T.ins.len]L = blk: {
-                    var result: [T.ins.len]L = undefined;
-
-                    inline for (T.ins, 0..) |port, idx| {
-                        const field_ptr = &@field(ptr, @tagName(port));
-                        result[idx] = switch (std.meta.FieldType(T, port)) {
-                            S => .{ .single = field_ptr },
-                            std.ArrayList(S) => .{ .list = field_ptr },
-                            else => unreachable,
-                        };
-                        //result[idx] = &@field(ptr, @tagName(port));
-                    }
-
-                    break :blk result;
-                };
-
-                const outs: [T.outs.len]*S = blk: {
-                    var result: [T.outs.len]*S = undefined;
-
-                    inline for (T.outs, 0..) |port, idx| {
-                        result[idx] = &@field(ptr, @tagName(port));
-                    }
-
-                    break :blk result;
-                };
-
-                const out_lets: [T.outs.len]L = blk: {
-                    var result: [T.outs.len]L = undefined;
-
-                    inline for (T.outs, 0..) |port, idx| {
-                        const field_ptr = &@field(ptr, @tagName(port));
-                        result[idx] = switch (std.meta.FieldType(T, port)) {
-                            S => .{ .single = field_ptr },
-                            std.ArrayList(S) => .{ .list = field_ptr },
-                            else => unreachable,
-                        };
-                    }
-
-                    break :blk result;
-                };
-
-                return .{ .t = ptr, .ins = ins, .in_lets = in_lets, .outs = outs, .out_lets = out_lets };
-            }
-
-            // assumes all port fields are the same type
-            pub fn inlets(ptr: *anyopaque) []*S {
-                const self: *Self = @ptrCast(@alignCast(ptr));
-                return self.ins[0..];
-            }
-
-            // idea for accessing array of in/outlets directly, w/o Ports instance
-            pub fn zInlets(ptr: *anyopaque, buf: []L) []L {
+            pub fn ins(ptr: *anyopaque) [T.ins.len]L {
                 var t: *T = @ptrCast(@alignCast(ptr));
+                var buf: [T.ins.len]L = undefined;
 
                 inline for (T.ins, 0..) |port, idx| {
                     const field_ptr = &@field(t, @tagName(port));
@@ -341,16 +263,12 @@ pub const Context = struct {
                     };
                 }
 
-                return buf[0..T.ins.len];
+                return buf;
             }
 
-            pub fn outlets(ptr: *anyopaque) []*S {
-                const self: *Self = @ptrCast(@alignCast(ptr));
-                return self.outs[0..];
-            }
-
-            pub fn zOutlets(ptr: *anyopaque, buf: []L) []L {
+            pub fn outs(ptr: *anyopaque) [T.outs.len]L {
                 var t: *T = @ptrCast(@alignCast(ptr));
+                var buf: [T.outs.len]L = undefined;
 
                 inline for (T.outs, 0..) |port, idx| {
                     const field_ptr = &@field(t, @tagName(port));
@@ -361,28 +279,10 @@ pub const Context = struct {
                     };
                 }
 
-                return buf[0..T.outs.len];
+                return buf;
             }
 
-            // pub fn get(ptr: *anyopaque, field_str: []const u8) *S {
-            //     const t: *T = @ptrCast(@alignCast(ptr));
-            //
-            //     inline for (T.ins) |in| {
-            //         if (std.mem.eql(u8, @tagName(in), field_str)) {
-            //             return &@field(t, @tagName(in));
-            //         }
-            //     }
-            //
-            //     inline for (T.outs) |out| {
-            //         if (std.mem.eql(u8, @tagName(out), field_str)) {
-            //             return &@field(t, @tagName(out));
-            //         }
-            //     }
-            //
-            //     unreachable;
-            // }
-
-            pub fn get_let(ptr: *anyopaque, field_str: []const u8) L {
+            pub fn get(ptr: *anyopaque, field_str: []const u8) L {
                 const t: *T = @ptrCast(@alignCast(ptr));
 
                 inline for (T.ins) |in| {
@@ -412,16 +312,21 @@ pub const Context = struct {
                 unreachable;
             }
 
-            pub fn getIn(self: Self, comptime idx: usize) *std.meta.FieldType(T, T.ins[idx]) {
-                return &@field(self.t, @tagName(T.ins[idx]));
+            pub fn getIn(ptr: *anyopaque, comptime idx: usize) *std.meta.FieldType(T, T.ins[idx]) {
+                const t: *T = @ptrCast(@alignCast(ptr));
+
+                return &@field(t, @tagName(T.ins[idx]));
             }
 
-            pub fn getOut(self: Self, comptime idx: usize) *std.meta.FieldType(T, T.outs[idx]) {
-                return &@field(self.t, @tagName(T.outs[idx]));
+            pub fn getOut(ptr: *anyopaque, comptime idx: usize) *std.meta.FieldType(T, T.outs[idx]) {
+                const t: *T = @ptrCast(@alignCast(ptr));
+
+                return &@field(t, @tagName(T.outs[idx]));
             }
 
-            pub fn getPtr(self: Self, comptime fe: FE) *std.meta.FieldType(T, fe) {
-                return &@field(self.t, @tagName(fe));
+            pub fn getPtr(ptr: *anyopaque, comptime fe: FE) *std.meta.FieldType(T, fe) {
+                const t: *T = @ptrCast(@alignCast(ptr));
+                return &@field(t, @tagName(fe));
             }
         };
     }
@@ -440,17 +345,19 @@ pub const Context = struct {
         };
         var node = PortNode{};
 
-        var p = Ports(PortNode, []const u8).init(&node);
+        const P = Ports(PortNode, []const u8);
 
-        try testing.expectEqualSlices(*const []const u8, &.{ &node.in_one, &node.in_two, &node.in_three }, Ports(PortNode, []const u8).inlets(&p));
+        // TODO: workshop
+        // var ins_buf: [8]P.L = undefined;
+        // try testing.expectEqualSlices(*const []const u8, &.{ &node.in_one, &node.in_two, &node.in_three }, P.ins(&node, &ins_buf));
+        //
+        try testing.expectEqual(@TypeOf(P.getPtr(&node, .out_back)), *[]const u8);
+        try testing.expectEqual(@TypeOf(P.getPtr(&node, .steak_house)), *f32);
 
-        try testing.expectEqual(@TypeOf(p.getPtr(.out_back)), *[]const u8);
-        try testing.expectEqual(@TypeOf(p.getPtr(.steak_house)), *f32);
+        const in_two = P.get(&node, "in_two");
+        in_two.single.* = P.getOut(&node, 0).*;
 
-        const in_two = @TypeOf(p).get_let(&node, "in_two");
-        in_two.single.* = @TypeOf(p).getOut(p, 0).*;
-
-        try testing.expectEqual(p.getPtr(.in_two).*, p.getPtr(.out_back).*);
+        try testing.expectEqual(P.getPtr(&node, .in_two).*, P.getPtr(&node, .out_back).*);
     }
 
     test "ConcreteA node interface" {
@@ -465,16 +372,17 @@ pub const Context = struct {
         try testing.expect(concrete_a.out != null);
 
         // confirm outlet points to same value
-        try testing.expectEqual(node.out_lets()[0].single, &concrete_a.out);
+        try testing.expectEqual(node.outs()[0].single, &concrete_a.out);
 
         // test assignment
-        node.port_lets("out").single.* = .{
+        node.port("out").single.* = .{
             .val = @as(*f32, @ptrFromInt(0xDEADBEEF + 1)),
             .src_node = &node,
         };
     }
 
-    // TODO: get topologically sorted list of nodes
+    // TODO: NEXT: actually high time to navigate the node graph correctly
+    // get topologically sorted list of nodes
     pub fn refreshNodeList(ctx: *Context) !void {
         if (ctx.node_list) |nodes| {
             ctx.alloc.free(nodes);
@@ -490,7 +398,7 @@ pub const Context = struct {
 
             prev_node = n;
 
-            for (n.in_lets()) |let| {
+            for (n.ins()) |let| {
                 switch (let) {
                     .single => |maybe_in| {
                         if (maybe_in.*) |in_signal| {
@@ -507,8 +415,8 @@ pub const Context = struct {
                                 if (!std.mem.containsAtLeast(*Context.Node, node_list.items, 1, &.{sig.src_node})) {
                                     try node_list.append(sig.src_node);
                                 }
-                                curr_node = null;
                             }
+                            curr_node = null;
                         }
                     },
                 }
@@ -530,25 +438,35 @@ pub const Context = struct {
 
         _ = ctx.registerNode(&node_a);
 
-        var concrete_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.out_lets()[0].single.* };
+        var concrete_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
         var node_b = concrete_b.node();
 
         concrete_b.out = ctx.registerNode(&node_b);
 
-        try testing.expect(node_b.out_lets()[0].single.* != null);
+        try testing.expect(node_b.outs()[0].single.* != null);
 
-        ctx.sink = node_b.out_lets()[0].single.*;
+        ctx.sink = node_b.outs()[0].single.*;
 
         try ctx.refreshNodeList();
 
         try testing.expectEqualSlices(*const Context.Node, &.{ &node_a, &node_b }, ctx.node_list.?);
     }
 
-    pub fn process(ctx: *Context) void {
+    pub fn process(ctx: *Context, should_print: bool) void {
         // for node in context graph, compute new values
         if (ctx.node_list) |list| {
             for (list) |node| {
                 node.process();
+                if (should_print == true) {
+                    const out = node.outs()[0];
+
+                    const out_val = switch (out) {
+                        .single => |val| val.*.?.val.*,
+                        else => unreachable, // there shouldnt be any list-shaped outputs
+                    };
+
+                    std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out_val });
+                }
             }
         }
         ctx.ticks += 1;
@@ -560,22 +478,22 @@ pub const Context = struct {
 
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
-
         _ = ctx.registerNode(&node_a);
 
-        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.out_lets()[0].single.* };
-        var node_b = concrete_b.node();
+        node_a.process();
 
+        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.port("out").single.* };
+        var node_b = concrete_b.node();
         _ = ctx.registerNode(&node_b);
 
-        var oscillator = Context.Oscillator{ .ctx = &ctx, .pitch = node_b.out_lets()[0].single.*, .amp = node_a.out_lets()[0].single.* };
-        var osc_node = oscillator.node();
+        node_b.process();
 
+        var oscillator = Context.Oscillator{ .ctx = &ctx, .pitch = node_b.port("out").single.*, .amp = node_a.port("out").single.* };
+        var osc_node = oscillator.node();
         _ = ctx.registerNode(&osc_node);
 
         var sink = try Context.ConcreteSink.init(&ctx);
         defer sink.deinit();
-
         var sink_node = sink.node();
 
         try sink.inputs.append(concrete_a.out);
@@ -584,19 +502,24 @@ pub const Context = struct {
 
         _ = ctx.registerNode(&sink_node);
 
-        ctx.sink = sink_node.port_lets("out").single.*;
+        ctx.sink = sink_node.port("out").single.*;
 
         try ctx.refreshNodeList();
+        std.debug.print("node list: ", .{});
+        for (ctx.node_list.?) |node| {
+            std.debug.print("{s}, ", .{node.*.id});
+        }
+        std.debug.print("\n", .{});
 
-        ctx.process();
+        ctx.process(true);
 
-        try testing.expectEqual(5, node_a.port_lets("out").single.*.?.val.*); // TODO: goodness gracious would you look at this nonsense
-        try testing.expectEqual(3.33333333, ctx.sink.?.val.*);
-
+        try testing.expectEqual(5, node_a.port("out").single.*.?.val.*); // TODO: goodness gracious would you look at this nonsense
+        try testing.expectEqual(5, ctx.sink.?.val.*);
+        //
         // lil mini benchmark
-        // about 1ms for 44_100 iterations through very simple graph, doesn't bode well.
         for (0..44_100) |_| {
-            ctx.process();
+            ctx.process(false);
+            ctx.ticks += 1;
         }
     }
 
@@ -618,7 +541,7 @@ pub const Context = struct {
 
         ctx.node_count += 1;
 
-        node.out_lets()[0].single.* = signal;
+        node.outs()[0].single.* = signal;
         return signal;
     }
 
@@ -631,7 +554,7 @@ pub const Context = struct {
 
         _ = ctx.registerNode(&node_a);
 
-        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.out_lets()[0].single.* };
+        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
         var node_b = concrete_b.node();
 
         concrete_b.out = ctx.registerNode(&node_b);
@@ -701,22 +624,13 @@ pub const Context = struct {
         }
 
         pub fn node(self: *ConcreteB) Context.Node {
-            return .{
-                .ptr = self,
-                .processFn = &ConcreteB.process,
-                //.ports = ports_ptr,
-                //.inletsFn = &P.inlets,
-                //.outletsFn = &P.outlets,
-                //.portFn = &P.get,
-                .portLetFn = &P.get_let,
-                .z_outletsFn = &P.zOutlets,
-                .z_inletsFn = &P.zInlets,
-            };
+            return Context.Node.init(self, ConcreteB);
         }
     };
 
     pub const Oscillator = struct {
         ctx: *Context,
+        id: []const u8 = "oscillator",
         wavetable: []const f32 = &wave,
         pitch: ?Context.Signal = null,
         amp: ?Context.Signal = null,
@@ -731,9 +645,11 @@ pub const Context = struct {
             const n: *Context.Oscillator = @ptrCast(@alignCast(ptr));
 
             if (n.out == null) {
+                std.debug.print("uh oh, no out for {s}\n", .{n.id});
                 return;
             }
 
+            // TODO: clamps on inputs, what if this is -3billion
             const pitch = blk: {
                 if (n.pitch) |pitch| {
                     break :blk pitch.val.*;
@@ -749,8 +665,10 @@ pub const Context = struct {
             };
 
             const len: f32 = @floatFromInt(n.wavetable.len);
-            var phase = @as(f32, @floatFromInt(n.wavetable.len)) * pitch * @as(f32, @floatFromInt(@mod(n.ctx.ticks, n.ctx.sample_rate))) / @as(f32, @floatFromInt(n.ctx.sample_rate));
 
+            var phase = len * pitch * @as(f32, @floatFromInt(@mod(n.ctx.ticks, n.ctx.sample_rate))) / @as(f32, @floatFromInt(n.ctx.sample_rate));
+
+            // TODO: prolly dont need this if we're modding above?
             while (phase >= len) {
                 phase -= len;
             }
@@ -767,17 +685,7 @@ pub const Context = struct {
         }
 
         pub fn node(self: *Oscillator) Context.Node {
-            return .{
-                .ptr = self,
-                .processFn = &Oscillator.process,
-                //.ports = ports_ptr,
-                // .inletsFn = &P.inlets,
-                // .outletsFn = &P.outlets,
-                // .portFn = &P.get,
-                .portLetFn = &P.get_let,
-                .z_outletsFn = &P.zOutlets,
-                .z_inletsFn = &P.zInlets,
-            };
+            return Context.Node.init(self, Oscillator);
         }
     };
 };
