@@ -106,11 +106,34 @@ pub const Context = struct {
         }
     };
 
-    pub const Signal = struct {
-        val: *f32,
-        src_node: *Context.Node,
-        pub fn get(s: *@This()) f32 {
-            return s.val.*;
+    //TODO: distinguish between ptrs and node-derived signals
+    pub const Signal = union(enum) {
+        ptr: struct { val: *f32, src_node: *Context.Node },
+        static: struct { val: f32 },
+
+        pub fn get(s: Context.Signal) f32 {
+            return switch (s) {
+                .ptr => |ptr_s| ptr_s.val.*,
+                .static => |static_s| static_s.val,
+            };
+        }
+
+        pub fn set(s: Context.Signal, v: f32) void {
+            switch (s) {
+                .ptr => |ptr_s| {
+                    ptr_s.val.* = v;
+                },
+                .static => {
+                    return;
+                },
+            }
+        }
+
+        pub fn source(s: Context.Signal) ?*Context.Node {
+            return switch (s) {
+                .ptr => |ptr_s| ptr_s.src_node,
+                .static => null,
+            };
         }
     };
 
@@ -135,12 +158,12 @@ pub const Context = struct {
 
             const in = blk: {
                 if (n.in) |in| {
-                    break :blk in.val.*;
+                    break :blk in.get();
                 }
                 break :blk 1.0;
             };
 
-            n.out.?.val.* = in * 5.0;
+            n.out.?.set(in * 5.0);
         }
 
         pub fn node(self: *ConcreteA) Context.Node {
@@ -183,13 +206,13 @@ pub const Context = struct {
 
             for (sink.inputs.items) |maybe_in| {
                 if (maybe_in) |in| {
-                    result += in.val.*;
+                    result += in.get();
                     input_count += 1;
                 }
             }
 
             result /= @floatFromInt(@max(input_count, 1));
-            sink.out.?.val.* = result;
+            sink.out.?.set(result);
         }
 
         pub fn node(self: *ConcreteSink) Context.Node {
@@ -209,22 +232,16 @@ pub const Context = struct {
 
         try testing.expect(sink.out != null);
 
-        var concrete_a = ConcreteA{ .ctx = &ctx };
-        var a_node = concrete_a.node();
-
-        var a: f32 = 1.0;
-        var b: f32 = 3.0;
-        var c: f32 = 8.0;
-        try sink.inputs.append(.{ .val = &a, .src_node = &a_node });
-        try sink.inputs.append(.{ .val = &b, .src_node = &a_node });
-        try sink.inputs.append(.{ .val = &c, .src_node = &a_node });
+        try sink.inputs.append(.{ .static = .{ .val = 1.0 } });
+        try sink.inputs.append(.{ .static = .{ .val = 3.0 } });
+        try sink.inputs.append(.{ .static = .{ .val = 8.0 } });
 
         // confirm outlet points to same value
         try testing.expectEqual(sink_node.outs()[0].single, &sink.out);
 
         sink_node.process();
 
-        try testing.expectEqual(4.0, sink_node.outs()[0].single.*.?.val.*);
+        try testing.expectEqual(4.0, sink_node.outs()[0].single.*.?.get());
     }
 
     // https://zigbin.io/9222cb
@@ -375,10 +392,10 @@ pub const Context = struct {
         try testing.expectEqual(node.outs()[0].single, &concrete_a.out);
 
         // test assignment
-        node.port("out").single.* = .{
+        node.port("out").single.* = .{ .ptr = .{
             .val = @as(*f32, @ptrFromInt(0xDEADBEEF + 1)),
             .src_node = &node,
-        };
+        } };
     }
 
     // TODO: NEXT: actually high time to navigate the node graph correctly
@@ -390,7 +407,7 @@ pub const Context = struct {
         var node_list = std.ArrayList(*Context.Node).init(ctx.alloc);
 
         // reversing DFS for now, just to see if this works
-        var curr_node: ?*Context.Node = ctx.sink.?.src_node;
+        var curr_node: ?*Context.Node = ctx.sink.?.source();
         var prev_node: ?*Context.Node = null;
 
         while (curr_node) |n| {
@@ -402,7 +419,7 @@ pub const Context = struct {
                 switch (let) {
                     .single => |maybe_in| {
                         if (maybe_in.*) |in_signal| {
-                            curr_node = in_signal.src_node;
+                            curr_node = in_signal.source();
                             break;
                         } else {
                             curr_node = null;
@@ -412,8 +429,8 @@ pub const Context = struct {
                         for (list.items) |maybe_sig| {
                             if (maybe_sig) |sig| {
                                 // check for node presence before slapping onto node list
-                                if (!std.mem.containsAtLeast(*Context.Node, node_list.items, 1, &.{sig.src_node})) {
-                                    try node_list.append(sig.src_node);
+                                if (!std.mem.containsAtLeast(*Context.Node, node_list.items, 1, &.{sig.source().?})) {
+                                    try node_list.append(sig.source().?);
                                 }
                             }
                             curr_node = null;
@@ -461,7 +478,7 @@ pub const Context = struct {
                     const out = node.outs()[0];
 
                     const out_val = switch (out) {
-                        .single => |val| val.*.?.val.*,
+                        .single => |val| val.*.?.get(),
                         else => unreachable, // there shouldnt be any list-shaped outputs
                     };
 
@@ -513,8 +530,8 @@ pub const Context = struct {
 
         ctx.process(true);
 
-        try testing.expectEqual(5, node_a.port("out").single.*.?.val.*); // TODO: goodness gracious would you look at this nonsense
-        try testing.expectEqual(5, ctx.sink.?.val.*);
+        try testing.expectEqual(5, node_a.port("out").single.*.?.get()); // TODO: goodness gracious would you look at this nonsense
+        try testing.expectEqual(5, ctx.sink.?.get());
         //
         // lil mini benchmark
         for (0..44_100) |_| {
@@ -537,7 +554,7 @@ pub const Context = struct {
     pub fn registerNode(ctx: *Context, node: *Context.Node) Context.Signal {
         // TODO: assert type has process function with compatible signature
 
-        const signal: Context.Signal = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node };
+        const signal: Context.Signal = .{ .ptr = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node } };
 
         ctx.node_count += 1;
 
@@ -608,19 +625,19 @@ pub const Context = struct {
 
             const multi = blk: {
                 if (n.multiplier) |m| {
-                    break :blk m.val.*;
+                    break :blk m.get();
                 }
                 break :blk 1.0;
             };
 
             const in = blk: {
                 if (n.in) |in| {
-                    break :blk in.val.*;
+                    break :blk in.get();
                 }
                 break :blk 1.0;
             };
 
-            n.out.?.val.* = in * multi + 5.0;
+            n.out.?.set(in * multi + 5.0);
         }
 
         pub fn node(self: *ConcreteB) Context.Node {
@@ -652,14 +669,14 @@ pub const Context = struct {
             // TODO: clamps on inputs, what if this is -3billion
             const pitch = blk: {
                 if (n.pitch) |pitch| {
-                    break :blk pitch.val.*;
+                    break :blk pitch.get();
                 }
                 break :blk 440.0;
             };
 
             const amp = blk: {
                 if (n.amp) |amp| {
-                    break :blk amp.val.*;
+                    break :blk amp.get();
                 }
                 break :blk 0.5;
             };
@@ -681,7 +698,7 @@ pub const Context = struct {
             const result: f32 = std.math.lerp(n.wavetable[lowInd], n.wavetable[highInd], fractional_distance) * amp;
 
             // store latest result
-            n.out.?.val.* = result;
+            n.out.?.set(result);
         }
 
         pub fn node(self: *Oscillator) Context.Node {
