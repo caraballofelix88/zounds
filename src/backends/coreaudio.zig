@@ -84,12 +84,12 @@ pub const Context = struct {
         return ctx.devices.items;
     }
 
-    pub fn renderCallback(refPtr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.C) c.OSStatus {
+    pub fn renderCallback(ref_ptr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.C) c.OSStatus {
         _ = au_render_flags;
         _ = timestamp;
         _ = bus_number;
 
-        const player: *Player = @ptrCast(@alignCast(refPtr));
+        const player: *Player = @ptrCast(@alignCast(ref_ptr));
 
         // TODO: move render stuff into writeFn
         const writeFn: main.WriteFn = player.writeFn;

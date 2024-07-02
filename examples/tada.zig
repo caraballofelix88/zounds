@@ -3,44 +3,39 @@ const zounds = @import("zounds");
 
 // simple LFO
 const Wobble = struct {
-    ctx: *const zounds.signals.AudioContext,
-    base_pitch: zounds.signals.Signal(f32) = .{ .static = 440.0 },
-    frequency: zounds.signals.Signal(f32) = .{ .static = 10.0 },
-    amp: zounds.signals.Signal(f32) = .{ .static = 10.0 },
+    ctx: *zounds.signals.Context,
+    id: []const u8 = "wobb",
+    base_pitch: ?zounds.signals.Context.Signal = .{ .static = .{ .val = 440.0 } },
+    frequency: ?zounds.signals.Context.Signal = .{ .static = .{ .val = 10.0 } },
+
+    amp: ?zounds.signals.Context.Signal = .{ .static = .{ .val = 10.0 } },
+    out: ?zounds.signals.Context.Signal = null,
     phase: f32 = 0,
 
-    pub fn nextFn(ptr: *anyopaque) f32 {
+    pub const ins = .{ .base_pitch, .frequency, .amp };
+    pub const outs = .{.out};
+
+    pub fn process(ptr: *anyopaque) void {
         var w: *Wobble = @ptrCast(@alignCast(ptr));
 
-        w.phase += std.math.tau * w.frequency.get() / @as(f32, @floatFromInt(w.ctx.sample_rate));
+        // TODO: maybe node should enforce this
+        if (w.out == null) {
+            return;
+        }
+
+        const result = w.base_pitch.?.get() + w.amp.?.get() * std.math.sin(w.phase);
+
+        w.phase += std.math.tau * w.frequency.?.get() * w.ctx.inv_sample_rate;
 
         while (w.phase >= std.math.tau) {
             w.phase -= std.math.tau;
         }
 
-        return w.base_pitch.get() + w.amp.get() * std.math.sin(w.phase);
+        w.out.?.set(result);
     }
 
-    pub fn node(w: *Wobble) zounds.signals.Node(f32) {
-        return .{ .ptr = w, .nextFn = nextFn };
-    }
-};
-
-pub const ChordNode = struct {
-    ctx: *zounds.signals.AudioContext,
-    notes: [3]zounds.signals.Signal(f32),
-    buf: [4]u8 = undefined,
-
-    pub fn nextFn(ptr: *anyopaque) f32 {
-        var n: *ChordNode = @ptrCast(@alignCast(ptr));
-
-        const sum: f32 = (n.notes[0].get() + n.notes[1].get() + n.notes[2].get()) / 3.0;
-        n.buf = @bitCast(sum);
-        return sum;
-    }
-
-    pub fn node(n: *ChordNode) zounds.signals.Node(f32) {
-        return .{ .ptr = n, .nextFn = nextFn };
+    pub fn node(ptr: *Wobble) zounds.signals.Context.Node {
+        return zounds.signals.Context.Node.init(ptr, Wobble);
     }
 };
 
@@ -58,12 +53,69 @@ pub fn main() !void {
         },
     };
 
+    var signal_ctx = try zounds.signals.Context.init(alloc);
+
+    var new_osc_a = zounds.signals.Context.Oscillator{
+        .ctx = &signal_ctx,
+        .pitch = .{ .static = .{ .val = zounds.utils.pitchFromNote(60) } },
+        .amp = .{ .static = .{ .val = 1.0 } },
+    };
+    var new_osc_node_a = new_osc_a.node();
+
+    _ = try signal_ctx.registerNode(&new_osc_node_a);
+
+    var wobb = Wobble{
+        .ctx = &signal_ctx,
+        .base_pitch = .{ .static = .{ .val = zounds.utils.pitchFromNote(63) } },
+    };
+    var wobb_node = wobb.node();
+
+    _ = try signal_ctx.registerNode(&wobb_node);
+
+    var new_osc_b = zounds.signals.Context.Oscillator{
+        .ctx = &signal_ctx,
+        .pitch = wobb.out,
+        .amp = .{ .static = .{ .val = 1.0 } },
+    };
+    var new_osc_node_b = new_osc_b.node();
+
+    _ = try signal_ctx.registerNode(&new_osc_node_b);
+
+    var new_osc_c = zounds.signals.Context.Oscillator{
+        .ctx = &signal_ctx,
+        .pitch = .{ .static = .{ .val = zounds.utils.pitchFromNote(67) } },
+        .amp = .{ .static = .{ .val = 1.0 } },
+    };
+    var new_osc_node_c = new_osc_c.node();
+
+    _ = try signal_ctx.registerNode(&new_osc_node_c);
+
+    var new_osc_d = zounds.signals.Context.Oscillator{
+        .ctx = &signal_ctx,
+        .pitch = .{ .static = .{ .val = zounds.utils.pitchFromNote(69) } },
+        .amp = .{ .static = .{ .val = 1.0 } },
+    };
+    var new_osc_node_d = new_osc_d.node();
+
+    _ = try signal_ctx.registerNode(&new_osc_node_d);
+
+    var new_chord = try zounds.signals.Context.ConcreteSink.init(&signal_ctx);
+    // TODO: cant release memory without ensuring the render thread is done first
+    //defer new_chord.deinit();
+
+    var new_chord_node = new_chord.node();
+
+    _ = try signal_ctx.registerNode(&new_chord_node);
+
+    _ = try new_chord.inputs.append(new_osc_node_a.out(0).single.*);
+    _ = try new_chord.inputs.append(new_osc_node_b.out(0).single.*);
+    _ = try new_chord.inputs.append(new_osc_node_c.out(0).single.*);
+    _ = try new_chord.inputs.append(new_osc_node_d.out(0).single.*);
+
     // TODO: audio context should derive its sample rate from available backend devices/formats
-    var audio_ctx = zounds.signals.AudioContext{ .sample_rate = 44_100 };
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 
     var trigger: bool = false;
-    const trigger_sig: zounds.signals.Signal(bool) = .{ .ptr = &trigger };
 
     // TODO: ADSR utility function for quickly generating 4-tuple ramp list
     const adsr: [4]zounds.envelope.Ramp = .{
@@ -96,34 +148,19 @@ pub fn main() !void {
             .duration = .{ .seconds = 0.3 },
         },
     };
+    _ = adsr; // autofix
 
-    var env = zounds.envelope.Envelope.init(&adsr, trigger_sig);
-    var chord_1 = zounds.signals.TestWavetableOscNode{
-        .ctx = &audio_ctx,
-        .pitch = .{ .static = zounds.utils.pitchFromNote(60) }, // C4
-        .amp = env.node().signal(),
-    };
+    signal_ctx.sink = new_chord.out;
+    _ = try signal_ctx.refreshNodeList();
+    wobb_node.process();
 
-    var chord_2 = zounds.signals.TestWavetableOscNode{
-        .ctx = &audio_ctx,
-        .pitch = .{ .static = zounds.utils.pitchFromNote(64) }, // E4
-        .amp = env.node().signal(),
-    };
+    std.debug.print("node list:\t", .{});
+    for (signal_ctx.node_list.?) |n| {
+        std.debug.print("{s}, ", .{n.id});
+    }
+    std.debug.print("\n", .{});
 
-    var chord_3 = zounds.signals.TestWavetableOscNode{
-        .ctx = &audio_ctx,
-        .pitch = .{ .static = zounds.utils.pitchFromNote(67) }, // G4
-        .amp = env.node().signal(),
-    };
-
-    var chord = ChordNode{
-        .ctx = &audio_ctx,
-        .notes = .{ chord_1.node().signal(), chord_2.node().signal(), chord_3.node().signal() },
-    };
-
-    audio_ctx.sink = chord.node().signal();
-
-    var context_source = audio_ctx.source();
+    var context_source = signal_ctx.source();
 
     const device: zounds.Device = .{
         .sample_rate = 44_100,
@@ -143,6 +180,8 @@ pub fn main() !void {
 
     player.play();
 
+    std.time.sleep(std.time.ns_per_ms * 1000);
+
     // ta
     trigger = true;
     std.debug.print("ta", .{});
@@ -155,6 +194,8 @@ pub fn main() !void {
     trigger = true;
     std.debug.print("-dah~\n", .{});
     std.time.sleep(std.time.ns_per_ms * 3000);
+
+    std.debug.print("ctx ticks:\t{}\n", .{signal_ctx.ticks});
 }
 
 pub fn writeFn(ref: *anyopaque, buf: []u8) void {

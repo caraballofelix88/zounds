@@ -8,11 +8,15 @@ const sources = @import("sources/main.zig");
 pub const Context = struct {
     alloc: std.mem.Allocator,
     scratch: []f32,
-    node_list: ?[]*Context.Node = null, // why is this optional lol
-    sink: ?Context.Signal = null, // should be ptr?
+    node_list: ?[]*Context.Node = null, // why is this optional lol ////// Actually, why not just a static array?
+    // TODO: what's the value of optional signals? maybe replace with static defaults across the board?
+    sink: ?Context.Signal = null, // why optional? could just be a static default val instead
     sample_rate: u32 = 44_100,
+    inv_sample_rate: f32 = 1.0 / 44_100.0,
     ticks: u64 = 0,
     node_count: u16 = 0,
+
+    tmp: [4]u8 = undefined,
 
     pub fn init(allocator: std.mem.Allocator) !Context {
         return .{
@@ -26,6 +30,25 @@ pub const Context = struct {
         if (ctx.node_list) |list| {
             ctx.alloc.free(list);
         }
+    }
+
+    // Temp compatibility stuff
+    pub fn nextFn(ptr: *anyopaque) ?[]u8 {
+        var ctx: *Context = @ptrCast(@alignCast(ptr));
+
+        const val = ctx.next();
+        ctx.tmp = std.mem.toBytes(val);
+
+        return &ctx.tmp;
+    }
+
+    pub fn hasNextFn(ptr: *anyopaque) bool {
+        _ = ptr;
+        return true;
+    }
+
+    pub fn source(ptr: *Context) sources.AudioSource {
+        return .{ .ptr = ptr, .nextFn = nextFn, .hasNextFn = hasNextFn };
     }
 
     pub fn Let(T: type) type {
@@ -143,7 +166,6 @@ pub const Context = struct {
         in: ?Context.Signal = null,
         out: ?Context.Signal = null,
 
-        pub const P = Ports(ConcreteA, ?Context.Signal);
         pub const ins = [_]std.meta.FieldEnum(ConcreteA){.in};
         pub const outs = [_]std.meta.FieldEnum(ConcreteA){.out};
 
@@ -177,7 +199,6 @@ pub const Context = struct {
         inputs: std.ArrayList(?Context.Signal),
         out: ?Context.Signal = null,
 
-        const P = Ports(ConcreteSink, ?Context.Signal);
         pub const ins = [_]std.meta.FieldEnum(ConcreteSink){.inputs};
         pub const outs = [_]std.meta.FieldEnum(ConcreteSink){.out};
 
@@ -228,7 +249,7 @@ pub const Context = struct {
         defer sink.deinit();
         var sink_node = sink.node();
 
-        _ = ctx.registerNode(&sink_node);
+        _ = try ctx.registerNode(&sink_node);
 
         try testing.expect(sink.out != null);
 
@@ -384,7 +405,7 @@ pub const Context = struct {
         var concrete_a = ConcreteA{ .ctx = &ctx };
         var node = concrete_a.node();
 
-        concrete_a.out = ctx.registerNode(&node);
+        concrete_a.out = try ctx.registerNode(&node);
 
         try testing.expect(concrete_a.out != null);
 
@@ -407,6 +428,9 @@ pub const Context = struct {
         var node_list = std.ArrayList(*Context.Node).init(ctx.alloc);
 
         // reversing DFS for now, just to see if this works
+        if (ctx.sink == null) {
+            return;
+        }
         var curr_node: ?*Context.Node = ctx.sink.?.source();
         var prev_node: ?*Context.Node = null;
 
@@ -445,7 +469,7 @@ pub const Context = struct {
         ctx.node_list = try node_list.toOwnedSlice();
     }
 
-    // TODO: NEXT: Node graph traversal, sort out shape of signals and nodes
+    // TODO:  Node graph traversal, sort out shape of signals and nodes
     test "context getNodeList" {
         var ctx = try Context.init(testing.allocator_instance.allocator());
         defer ctx.deinit();
@@ -453,12 +477,12 @@ pub const Context = struct {
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
 
-        _ = ctx.registerNode(&node_a);
+        _ = try ctx.registerNode(&node_a);
 
         var concrete_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
         var node_b = concrete_b.node();
 
-        concrete_b.out = ctx.registerNode(&node_b);
+        concrete_b.out = try ctx.registerNode(&node_b);
 
         try testing.expect(node_b.outs()[0].single.* != null);
 
@@ -486,7 +510,6 @@ pub const Context = struct {
                 }
             }
         }
-        ctx.ticks += 1;
     }
 
     test "process" {
@@ -495,19 +518,19 @@ pub const Context = struct {
 
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
-        _ = ctx.registerNode(&node_a);
+        _ = try ctx.registerNode(&node_a);
 
         node_a.process();
 
         var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.port("out").single.* };
         var node_b = concrete_b.node();
-        _ = ctx.registerNode(&node_b);
+        _ = try ctx.registerNode(&node_b);
 
         node_b.process();
 
         var oscillator = Context.Oscillator{ .ctx = &ctx, .pitch = node_b.port("out").single.*, .amp = node_a.port("out").single.* };
         var osc_node = oscillator.node();
-        _ = ctx.registerNode(&osc_node);
+        _ = try ctx.registerNode(&osc_node);
 
         var sink = try Context.ConcreteSink.init(&ctx);
         defer sink.deinit();
@@ -517,7 +540,7 @@ pub const Context = struct {
         try sink.inputs.append(concrete_b.out);
         try sink.inputs.append(oscillator.out);
 
-        _ = ctx.registerNode(&sink_node);
+        _ = try ctx.registerNode(&sink_node);
 
         ctx.sink = sink_node.port("out").single.*;
 
@@ -540,25 +563,34 @@ pub const Context = struct {
         }
     }
 
-    pub fn next(ctx: *Context) !f32 {
+    pub fn next(ctx: *Context) f32 {
+
         // process all nodes
-        ctx.process();
+        ctx.process(false);
 
         // tick counter
         ctx.ticks += 1;
+
+        return ctx.sink.?.get();
     }
 
     // TODO: unregistering, i guess
     // TODO: feels jank, maybe, keep thinking about this
     // Reserves space for node output in context scratch
-    pub fn registerNode(ctx: *Context, node: *Context.Node) Context.Signal {
+    pub fn registerNode(ctx: *Context, node: *Context.Node) !Context.Signal {
         // TODO: assert type has process function with compatible signature
 
         const signal: Context.Signal = .{ .ptr = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node } };
 
         ctx.node_count += 1;
 
-        node.outs()[0].single.* = signal;
+        node.out(0).single.* = signal;
+
+        if (ctx.sink == null) {
+            ctx.sink = signal;
+        }
+
+        try refreshNodeList(ctx);
         return signal;
     }
 
@@ -569,12 +601,12 @@ pub const Context = struct {
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
 
-        _ = ctx.registerNode(&node_a);
+        _ = try ctx.registerNode(&node_a);
 
         var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
         var node_b = concrete_b.node();
 
-        concrete_b.out = ctx.registerNode(&node_b);
+        concrete_b.out = try ctx.registerNode(&node_b);
 
         node_a.process(); // x * 5
         node_b.process(); // in * multi + 5
@@ -609,8 +641,6 @@ pub const Context = struct {
         multiplier: ?Context.Signal = null,
         out: ?Context.Signal = null,
 
-        const SignalType = ?Context.Signal;
-        pub const P = Ports(ConcreteB, SignalType);
         pub const ins = [_]std.meta.FieldEnum(ConcreteB){ .in, .multiplier };
         pub const outs = [_]std.meta.FieldEnum(ConcreteB){.out};
 
@@ -652,9 +682,8 @@ pub const Context = struct {
         pitch: ?Context.Signal = null,
         amp: ?Context.Signal = null,
         out: ?Context.Signal = null,
+        phase: f32 = 0.0,
 
-        const SignalType = ?Context.Signal;
-        pub const P = Ports(Oscillator, SignalType);
         pub const ins = [_]std.meta.FieldEnum(Oscillator){ .pitch, .amp };
         pub const outs = [_]std.meta.FieldEnum(Oscillator){.out};
 
@@ -682,20 +711,17 @@ pub const Context = struct {
             };
 
             const len: f32 = @floatFromInt(n.wavetable.len);
+            const lowInd: usize = @intFromFloat(@floor(n.phase));
+            const highInd: usize = @intFromFloat(@mod(@ceil(n.phase), len));
 
-            var phase = len * pitch * @as(f32, @floatFromInt(@mod(n.ctx.ticks, n.ctx.sample_rate))) / @as(f32, @floatFromInt(n.ctx.sample_rate));
-
-            // TODO: prolly dont need this if we're modding above?
-            while (phase >= len) {
-                phase -= len;
-            }
-
-            const lowInd: usize = @intFromFloat(@floor(phase));
-            const highInd: usize = @intFromFloat(@mod(@ceil(phase), len));
-
-            const fractional_distance: f32 = @rem(phase, 1);
+            const fractional_distance: f32 = @rem(n.phase, 1);
 
             const result: f32 = std.math.lerp(n.wavetable[lowInd], n.wavetable[highInd], fractional_distance) * amp;
+
+            n.phase += len * pitch * n.ctx.inv_sample_rate;
+            while (n.phase >= len) {
+                n.phase -= len;
+            }
 
             // store latest result
             n.out.?.set(result);
