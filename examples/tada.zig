@@ -5,10 +5,10 @@ const zounds = @import("zounds");
 const Wobble = struct {
     ctx: *zounds.signals.Context,
     id: []const u8 = "wobb",
-    base_pitch: ?zounds.signals.Context.Signal = .{ .static = .{ .val = 440.0 } },
-    frequency: ?zounds.signals.Context.Signal = .{ .static = .{ .val = 10.0 } },
+    base_pitch: ?zounds.signals.Context.Signal = .{ .static = 440.0 },
+    frequency: ?zounds.signals.Context.Signal = .{ .static = 10.0 },
 
-    amp: ?zounds.signals.Context.Signal = .{ .static = .{ .val = 10.0 } },
+    amp: ?zounds.signals.Context.Signal = .{ .static = 10.0 },
     out: ?zounds.signals.Context.Signal = null,
     phase: f32 = 0,
 
@@ -57,8 +57,8 @@ pub fn main() !void {
 
     var new_osc_a = zounds.signals.Context.Oscillator{
         .ctx = &signal_ctx,
-        .pitch = .{ .static = .{ .val = zounds.utils.pitchFromNote(60) } },
-        .amp = .{ .static = .{ .val = 1.0 } },
+        .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
+        .amp = .{ .static = 1.0 },
     };
     var new_osc_node_a = new_osc_a.node();
 
@@ -66,7 +66,7 @@ pub fn main() !void {
 
     var wobb = Wobble{
         .ctx = &signal_ctx,
-        .base_pitch = .{ .static = .{ .val = zounds.utils.pitchFromNote(63) } },
+        .base_pitch = .{ .static = zounds.utils.pitchFromNote(63) },
     };
     var wobb_node = wobb.node();
 
@@ -75,7 +75,7 @@ pub fn main() !void {
     var new_osc_b = zounds.signals.Context.Oscillator{
         .ctx = &signal_ctx,
         .pitch = wobb.out,
-        .amp = .{ .static = .{ .val = 1.0 } },
+        .amp = .{ .static = 1.0 },
     };
     var new_osc_node_b = new_osc_b.node();
 
@@ -83,8 +83,8 @@ pub fn main() !void {
 
     var new_osc_c = zounds.signals.Context.Oscillator{
         .ctx = &signal_ctx,
-        .pitch = .{ .static = .{ .val = zounds.utils.pitchFromNote(67) } },
-        .amp = .{ .static = .{ .val = 1.0 } },
+        .pitch = .{ .static = zounds.utils.pitchFromNote(67) },
+        .amp = .{ .static = 1.0 },
     };
     var new_osc_node_c = new_osc_c.node();
 
@@ -92,8 +92,8 @@ pub fn main() !void {
 
     var new_osc_d = zounds.signals.Context.Oscillator{
         .ctx = &signal_ctx,
-        .pitch = .{ .static = .{ .val = zounds.utils.pitchFromNote(69) } },
-        .amp = .{ .static = .{ .val = 1.0 } },
+        .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
+        .amp = .{ .static = 1.0 },
     };
     var new_osc_node_d = new_osc_d.node();
 

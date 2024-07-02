@@ -132,12 +132,12 @@ pub const Context = struct {
     //TODO: distinguish between ptrs and node-derived signals
     pub const Signal = union(enum) {
         ptr: struct { val: *f32, src_node: *Context.Node },
-        static: struct { val: f32 },
+        static: f32,
 
         pub fn get(s: Context.Signal) f32 {
             return switch (s) {
                 .ptr => |ptr_s| ptr_s.val.*,
-                .static => |static_s| static_s.val,
+                .static => |val| val,
             };
         }
 
@@ -253,9 +253,9 @@ pub const Context = struct {
 
         try testing.expect(sink.out != null);
 
-        try sink.inputs.append(.{ .static = .{ .val = 1.0 } });
-        try sink.inputs.append(.{ .static = .{ .val = 3.0 } });
-        try sink.inputs.append(.{ .static = .{ .val = 8.0 } });
+        try sink.inputs.append(.{ .static = 1.0 });
+        try sink.inputs.append(.{ .static = 3.0 });
+        try sink.inputs.append(.{ .static = 8.0 });
 
         // confirm outlet points to same value
         try testing.expectEqual(sink_node.outs()[0].single, &sink.out);
@@ -711,6 +711,7 @@ pub const Context = struct {
             };
 
             const len: f32 = @floatFromInt(n.wavetable.len);
+
             const lowInd: usize = @intFromFloat(@floor(n.phase));
             const highInd: usize = @intFromFloat(@mod(@ceil(n.phase), len));
 
