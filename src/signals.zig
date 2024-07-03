@@ -5,12 +5,14 @@ const main = @import("main.zig");
 const osc = @import("sources/osc.zig");
 const sources = @import("sources/main.zig");
 
+const dsp = @import("dsp.zig");
+
 pub const Context = struct {
     alloc: std.mem.Allocator,
     scratch: []f32,
-    node_list: ?[]*Context.Node = null, // why is this optional lol ////// Actually, why not just a static array?
+    node_list: ?[]*Node = null, // why is this optional lol ////// Actually, why not just a static array?
     // TODO: what's the value of optional signals? maybe replace with static defaults across the board?
-    sink: ?Context.Signal = null, // why optional? could just be a static default val instead
+    sink: ?Signal = null, // why optional? could just be a static default val instead
     sample_rate: u32 = 44_100,
     inv_sample_rate: f32 = 1.0 / 44_100.0,
     ticks: u64 = 0,
@@ -51,115 +53,6 @@ pub const Context = struct {
         return .{ .ptr = ptr, .nextFn = nextFn, .hasNextFn = hasNextFn };
     }
 
-    pub fn Let(T: type) type {
-        return union(enum) {
-            single: *T,
-            list: *std.ArrayList(T),
-
-            const Self = @This();
-
-            pub fn get(s: Self, idx: ?usize) *T {
-                const n = idx orelse 0;
-                return switch (s) {
-                    .single => |val| val,
-                    .list => |list| &list.items[n],
-                };
-            }
-        };
-    }
-
-    pub const Node = struct {
-        id: []const u8 = "x",
-        num_inlets: u8 = undefined,
-        num_outlets: u8 = undefined,
-        inlets: [8]Portlet = undefined,
-        outlets: [8]Portlet = undefined,
-        ptr: *anyopaque,
-        processFn: *const fn (*anyopaque) void,
-        portletFn: *const fn (*anyopaque, []const u8) Portlet,
-
-        const Portlet = Let(?Context.Signal);
-
-        pub fn init(ptr: *anyopaque, T: type) Context.Node {
-            const concrete: *T = @ptrCast(@alignCast(ptr));
-            const P = Ports(T, ?Context.Signal);
-            var node: Context.Node = .{
-                .ptr = ptr,
-                .id = concrete.id,
-                .processFn = &T.process,
-                .portletFn = &P.get,
-            };
-
-            const p_ins = P.ins(ptr);
-            const p_outs = P.outs(ptr);
-
-            node.num_inlets = p_ins.len;
-            node.num_outlets = p_outs.len;
-
-            std.mem.copyForwards(Portlet, node.inlets[0..], p_ins[0..]);
-            std.mem.copyForwards(Portlet, node.outlets[0..], p_outs[0..]);
-
-            return node;
-        }
-
-        pub fn process(n: Context.Node) void {
-            n.processFn(n.ptr);
-        }
-
-        pub fn ins(n: *Context.Node) []Portlet {
-            return n.inlets[0..n.num_inlets];
-        }
-
-        pub fn in(n: Context.Node, idx: usize) Portlet {
-            // assert idx no greater than inlet count
-            return n.inlets[idx];
-        }
-
-        pub fn out(n: Context.Node, idx: usize) Portlet {
-            // assert idx no greater than inlet count
-            return n.outlets[idx];
-        }
-
-        pub fn outs(n: *Context.Node) []Portlet {
-            return n.outlets[0..n.num_outlets];
-        }
-
-        pub fn port(n: Context.Node, field_name: []const u8) Portlet {
-            return n.portletFn(n.ptr, field_name);
-        }
-    };
-
-    //TODO: distinguish between ptrs and node-derived signals
-    pub const Signal = union(enum) {
-        ptr: struct { val: *f32, src_node: *Context.Node },
-        static: f32,
-
-        pub fn get(s: Context.Signal) f32 {
-            return switch (s) {
-                .ptr => |ptr_s| ptr_s.val.*,
-                .static => |val| val,
-            };
-        }
-
-        pub fn set(s: Context.Signal, v: f32) void {
-            switch (s) {
-                .ptr => |ptr_s| {
-                    ptr_s.val.* = v;
-                },
-                .static => {
-                    return;
-                },
-            }
-        }
-
-        pub fn source(s: Context.Signal) ?*Context.Node {
-            return switch (s) {
-                .ptr => |ptr_s| ptr_s.src_node,
-                .static => null,
-            };
-        }
-    };
-
     pub const ConcreteA = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteA",
@@ -188,8 +81,8 @@ pub const Context = struct {
             n.out.?.set(in * 5.0);
         }
 
-        pub fn node(self: *ConcreteA) Context.Node {
-            return Context.Node.init(self, ConcreteA);
+        pub fn node(self: *ConcreteA) Node {
+            return Node.init(self, ConcreteA);
         }
     };
 
@@ -236,8 +129,8 @@ pub const Context = struct {
             sink.out.?.set(result);
         }
 
-        pub fn node(self: *ConcreteSink) Context.Node {
-            return Context.Node.init(self, ConcreteSink);
+        pub fn node(self: *ConcreteSink) Node {
+            return Node.init(self, ConcreteSink);
         }
     };
 
@@ -263,139 +156,6 @@ pub const Context = struct {
         sink_node.process();
 
         try testing.expectEqual(4.0, sink_node.outs()[0].single.*.?.get());
-    }
-
-    // https://zigbin.io/9222cb
-    // shoutouts to Francis on the forums
-
-    pub fn Ports(comptime T: anytype, comptime S: anytype) type {
-        // Serves as an interface to a concrete class's input and output.
-        // Upstream types must designate which fields are input and output data through
-        // FieldEnum arrays.
-
-        // S type designates the expected type for inputs and outputs. For now, all inputs and outputs are expected to
-        // be the same type, because I can't quite figure out how to make lists of heterogeneous pointers work ergonomically at runtime.
-        // eg. how do we provide Signal types that don't care what their Child type is?
-        // idea: Signals as union types, like before
-
-        // Placeholder
-        //const S = ?Context.Signal(f32);
-
-        return struct {
-            t: *T,
-
-            const Self = @This();
-            const FE = std.meta.FieldEnum(T);
-            pub const L = Let(S);
-
-            pub fn ins(ptr: *anyopaque) [T.ins.len]L {
-                var t: *T = @ptrCast(@alignCast(ptr));
-                var buf: [T.ins.len]L = undefined;
-
-                inline for (T.ins, 0..) |port, idx| {
-                    const field_ptr = &@field(t, @tagName(port));
-                    buf[idx] = switch (std.meta.FieldType(T, port)) {
-                        S => .{ .single = field_ptr },
-                        std.ArrayList(S) => .{ .list = field_ptr },
-                        else => unreachable,
-                    };
-                }
-
-                return buf;
-            }
-
-            pub fn outs(ptr: *anyopaque) [T.outs.len]L {
-                var t: *T = @ptrCast(@alignCast(ptr));
-                var buf: [T.outs.len]L = undefined;
-
-                inline for (T.outs, 0..) |port, idx| {
-                    const field_ptr = &@field(t, @tagName(port));
-                    buf[idx] = switch (std.meta.FieldType(T, port)) {
-                        S => .{ .single = field_ptr },
-                        std.ArrayList(S) => .{ .list = field_ptr },
-                        else => unreachable,
-                    };
-                }
-
-                return buf;
-            }
-
-            pub fn get(ptr: *anyopaque, field_str: []const u8) L {
-                const t: *T = @ptrCast(@alignCast(ptr));
-
-                inline for (T.ins) |in| {
-                    if (std.mem.eql(u8, @tagName(in), field_str)) {
-                        const field_ptr = &@field(t, @tagName(in));
-
-                        return switch (std.meta.FieldType(T, in)) {
-                            S => .{ .single = field_ptr },
-                            std.ArrayList(S) => .{ .list = field_ptr },
-                            else => unreachable,
-                        };
-                    }
-                }
-
-                inline for (T.outs) |out| {
-                    if (std.mem.eql(u8, @tagName(out), field_str)) {
-                        const field_ptr = &@field(t, @tagName(out));
-
-                        return switch (std.meta.FieldType(T, out)) {
-                            S => .{ .single = field_ptr },
-                            std.ArrayList(S) => .{ .list = field_ptr },
-                            else => unreachable,
-                        };
-                    }
-                }
-
-                unreachable;
-            }
-
-            pub fn getIn(ptr: *anyopaque, comptime idx: usize) *std.meta.FieldType(T, T.ins[idx]) {
-                const t: *T = @ptrCast(@alignCast(ptr));
-
-                return &@field(t, @tagName(T.ins[idx]));
-            }
-
-            pub fn getOut(ptr: *anyopaque, comptime idx: usize) *std.meta.FieldType(T, T.outs[idx]) {
-                const t: *T = @ptrCast(@alignCast(ptr));
-
-                return &@field(t, @tagName(T.outs[idx]));
-            }
-
-            pub fn getPtr(ptr: *anyopaque, comptime fe: FE) *std.meta.FieldType(T, fe) {
-                const t: *T = @ptrCast(@alignCast(ptr));
-                return &@field(t, @tagName(fe));
-            }
-        };
-    }
-
-    test "Ports" {
-        const PortNode = struct {
-            in_one: []const u8 = "1",
-            in_two: []const u8 = "2",
-            in_three: []const u8 = "3",
-            drive_in: []const u8 = "no",
-            out_back: []const u8 = "yes",
-            steak_house: f32 = 9999.0,
-
-            pub const ins = [_]std.meta.FieldEnum(@This()){ .in_one, .in_two, .in_three };
-            pub const outs = [_]std.meta.FieldEnum(@This()){.out_back};
-        };
-        var node = PortNode{};
-
-        const P = Ports(PortNode, []const u8);
-
-        // TODO: workshop
-        // var ins_buf: [8]P.L = undefined;
-        // try testing.expectEqualSlices(*const []const u8, &.{ &node.in_one, &node.in_two, &node.in_three }, P.ins(&node, &ins_buf));
-        //
-        try testing.expectEqual(@TypeOf(P.getPtr(&node, .out_back)), *[]const u8);
-        try testing.expectEqual(@TypeOf(P.getPtr(&node, .steak_house)), *f32);
-
-        const in_two = P.get(&node, "in_two");
-        in_two.single.* = P.getOut(&node, 0).*;
-
-        try testing.expectEqual(P.getPtr(&node, .in_two).*, P.getPtr(&node, .out_back).*);
     }
 
     test "ConcreteA node interface" {
@@ -425,14 +185,14 @@ pub const Context = struct {
         if (ctx.node_list) |nodes| {
             ctx.alloc.free(nodes);
         }
-        var node_list = std.ArrayList(*Context.Node).init(ctx.alloc);
+        var node_list = std.ArrayList(*Node).init(ctx.alloc);
 
         // reversing DFS for now, just to see if this works
         if (ctx.sink == null) {
             return;
         }
-        var curr_node: ?*Context.Node = ctx.sink.?.source();
-        var prev_node: ?*Context.Node = null;
+        var curr_node: ?*Node = ctx.sink.?.source();
+        var prev_node: ?*Node = null;
 
         while (curr_node) |n| {
             try node_list.append(n);
@@ -453,7 +213,7 @@ pub const Context = struct {
                         for (list.items) |maybe_sig| {
                             if (maybe_sig) |sig| {
                                 // check for node presence before slapping onto node list
-                                if (!std.mem.containsAtLeast(*Context.Node, node_list.items, 1, &.{sig.source().?})) {
+                                if (!std.mem.containsAtLeast(*Node, node_list.items, 1, &.{sig.source().?})) {
                                     try node_list.append(sig.source().?);
                                 }
                             }
@@ -464,7 +224,7 @@ pub const Context = struct {
             }
         }
 
-        std.mem.reverse(*const Context.Node, node_list.items);
+        std.mem.reverse(*const Node, node_list.items);
 
         ctx.node_list = try node_list.toOwnedSlice();
     }
@@ -490,7 +250,7 @@ pub const Context = struct {
 
         try ctx.refreshNodeList();
 
-        try testing.expectEqualSlices(*const Context.Node, &.{ &node_a, &node_b }, ctx.node_list.?);
+        try testing.expectEqualSlices(*const Node, &.{ &node_a, &node_b }, ctx.node_list.?);
     }
 
     pub fn process(ctx: *Context, should_print: bool) void {
@@ -528,7 +288,7 @@ pub const Context = struct {
 
         node_b.process();
 
-        var oscillator = Context.Oscillator{ .ctx = &ctx, .pitch = node_b.port("out").single.*, .amp = node_a.port("out").single.* };
+        var oscillator = dsp.Oscillator{ .ctx = &ctx, .pitch = node_b.port("out").single.*, .amp = node_a.port("out").single.* };
         var osc_node = oscillator.node();
         _ = try ctx.registerNode(&osc_node);
 
@@ -577,10 +337,10 @@ pub const Context = struct {
     // TODO: unregistering, i guess
     // TODO: feels jank, maybe, keep thinking about this
     // Reserves space for node output in context scratch
-    pub fn registerNode(ctx: *Context, node: *Context.Node) !Context.Signal {
+    pub fn registerNode(ctx: *Context, node: *Node) !Signal {
         // TODO: assert type has process function with compatible signature
 
-        const signal: Context.Signal = .{ .ptr = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node } };
+        const signal: Signal = .{ .ptr = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node } };
 
         ctx.node_count += 1;
 
@@ -598,12 +358,12 @@ pub const Context = struct {
         var ctx = try Context.init(testing.allocator_instance.allocator());
         defer ctx.deinit();
 
-        var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
+        var concrete_a = ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
 
         _ = try ctx.registerNode(&node_a);
 
-        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
+        var concrete_b = ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
         var node_b = concrete_b.node();
 
         concrete_b.out = try ctx.registerNode(&node_b);
@@ -637,15 +397,15 @@ pub const Context = struct {
     pub const ConcreteB = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteB",
-        in: ?Context.Signal = null,
-        multiplier: ?Context.Signal = null,
-        out: ?Context.Signal = null,
+        in: ?Signal = null,
+        multiplier: ?Signal = null,
+        out: ?Signal = null,
 
         pub const ins = [_]std.meta.FieldEnum(ConcreteB){ .in, .multiplier };
         pub const outs = [_]std.meta.FieldEnum(ConcreteB){.out};
 
         pub fn process(ptr: *anyopaque) void {
-            const n: *Context.ConcreteB = @ptrCast(@alignCast(ptr));
+            const n: *ConcreteB = @ptrCast(@alignCast(ptr));
 
             if (n.out == null) {
                 // need to register node first to assign signal
@@ -670,66 +430,8 @@ pub const Context = struct {
             n.out.?.set(in * multi + 5.0);
         }
 
-        pub fn node(self: *ConcreteB) Context.Node {
-            return Context.Node.init(self, ConcreteB);
-        }
-    };
-
-    pub const Oscillator = struct {
-        ctx: *Context,
-        id: []const u8 = "oscillator",
-        wavetable: []const f32 = &wave,
-        pitch: ?Context.Signal = null,
-        amp: ?Context.Signal = null,
-        out: ?Context.Signal = null,
-        phase: f32 = 0.0,
-
-        pub const ins = [_]std.meta.FieldEnum(Oscillator){ .pitch, .amp };
-        pub const outs = [_]std.meta.FieldEnum(Oscillator){.out};
-
-        pub fn process(ptr: *anyopaque) void {
-            const n: *Context.Oscillator = @ptrCast(@alignCast(ptr));
-
-            if (n.out == null) {
-                std.debug.print("uh oh, no out for {s}\n", .{n.id});
-                return;
-            }
-
-            // TODO: clamps on inputs, what if this is -3billion
-            const pitch = blk: {
-                if (n.pitch) |pitch| {
-                    break :blk pitch.get();
-                }
-                break :blk 440.0;
-            };
-
-            const amp = blk: {
-                if (n.amp) |amp| {
-                    break :blk amp.get();
-                }
-                break :blk 0.5;
-            };
-
-            const len: f32 = @floatFromInt(n.wavetable.len);
-
-            const lowInd: usize = @intFromFloat(@floor(n.phase));
-            const highInd: usize = @intFromFloat(@mod(@ceil(n.phase), len));
-
-            const fractional_distance: f32 = @rem(n.phase, 1);
-
-            const result: f32 = std.math.lerp(n.wavetable[lowInd], n.wavetable[highInd], fractional_distance) * amp;
-
-            n.phase += len * pitch * n.ctx.inv_sample_rate;
-            while (n.phase >= len) {
-                n.phase -= len;
-            }
-
-            // store latest result
-            n.out.?.set(result);
-        }
-
-        pub fn node(self: *Oscillator) Context.Node {
-            return Context.Node.init(self, Oscillator);
+        pub fn node(self: *ConcreteB) Node {
+            return Node.init(self, ConcreteB);
         }
     };
 };
@@ -739,192 +441,244 @@ test "new context" {
     defer ctx.deinit();
 }
 
-// TODO: rename to something else?
-pub const AudioContext = struct {
-    sample_rate: u32,
-    ticks: u64 = 0, // count of samples played
-
-    sink: ?Signal(f32) = undefined,
-    buf: [4]u8 = undefined,
-
-    pub fn next(ctx: *AudioContext) f32 {
-        ctx.ticks += 1;
-
-        var result: f32 = undefined;
-        if (ctx.sink) |signal| {
-            result = signal.get();
-        } else {
-            result = 0.0;
-        }
-
-        ctx.buf = @bitCast(result);
-
-        return result;
-    }
-
-    pub fn nextFn(ptr: *anyopaque) ?[]u8 {
-        var ctx: *AudioContext = @ptrCast(@alignCast(ptr));
-
-        // tick ctx
-        _ = ctx.next();
-
-        return ctx.buf[0..];
-    }
-
-    pub fn hasNextFn(ptr: *anyopaque) bool {
-        _ = ptr;
-        return true;
-    }
-    pub fn source(ptr: *AudioContext) sources.AudioSource {
-        return .{ .ptr = ptr, .nextFn = nextFn, .hasNextFn = hasNextFn };
-    }
-};
-
-const wave = osc.Wavetable(1024, .sine);
-
-// TODO: rename
-pub const TestWavetableOscNode = struct {
-    ctx: *const AudioContext,
-    wavetable: []const f32 = &wave,
-    pitch: Signal(f32) = .{ .static = 20.0 },
-    amp: Signal(f32) = .{ .static = 1.0 },
-    buf: [4]u8 = undefined,
-    phase: f32 = 0,
-
-    pub fn nextFn(ptr: *anyopaque) f32 {
-        var n: *TestWavetableOscNode = @ptrCast(@alignCast(ptr));
-        const len: f32 = @floatFromInt(n.wavetable.len);
-
-        const lowInd: usize = @intFromFloat(@floor(n.phase));
-        const highInd: usize = @intFromFloat(@mod(@ceil(n.phase), len));
-
-        const fractional_distance: f32 = @rem(n.phase, 1);
-
-        const result: f32 = std.math.lerp(n.wavetable[lowInd], n.wavetable[highInd], fractional_distance) * n.amp.get();
-
-        // n.phase += @as(f32, @floatFromInt(n.wavetable.len)) * n.pitch.get() / @as(f32, @floatFromInt(n.ctx.sample_rate));
-        n.phase = @as(f32, @floatFromInt(n.wavetable.len)) * n.pitch.get() * @as(f32, @floatFromInt(@mod(n.ctx.ticks, n.ctx.sample_rate))) / @as(f32, @floatFromInt(n.ctx.sample_rate));
-
-        while (n.phase >= len) {
-            n.phase -= len;
-        }
-        // store latest result
-        n.buf = @bitCast(result);
-
-        return result;
-    }
-
-    pub fn node(n: *TestWavetableOscNode) Node(f32) {
-        return .{ .ptr = n, .nextFn = nextFn };
-    }
-};
-
-const TestNode = struct {
-    current: f32 = 0.0,
-    ctx: ?*const AudioContext = null,
-
-    pub fn nextFn(ptr: *anyopaque) f32 {
-        var tn: *TestNode = @ptrCast(@alignCast(ptr));
-
-        tn.current += 1.0;
-        return @mod(tn.current, 10.0);
-    }
-
-    pub fn node(n: *TestNode) Node(f32) {
-        return .{ .ptr = n, .nextFn = nextFn };
-    }
-};
-
-// represents a generic processing step for audio, produces a Signal
-pub fn Node(comptime T: type) type {
-    return struct {
-        ptr: *anyopaque,
-        nextFn: *const fn (ptr: *anyopaque) T,
+pub fn Let(T: type) type {
+    return union(enum) {
+        single: *T,
+        list: *std.ArrayList(T),
 
         const Self = @This();
 
-        pub fn next(self: Self) T {
-            return self.nextFn(self.ptr);
-        }
-
-        pub fn signal(n: Self) Signal(T) {
-            return .{ .node = n };
-        }
-    };
-}
-
-const SignalValueTags = enum {
-    static,
-    node,
-    ptr,
-};
-
-// Value provider for audio nodes
-pub fn Signal(comptime T: type) type {
-    return union(SignalValueTags) {
-        static: T,
-        node: Node(T),
-        ptr: *const T,
-
-        const Self = @This();
-
-        pub fn get(s: Self) T {
+        pub fn get(s: Self, idx: ?usize) *T {
+            const n = idx orelse 0;
             return switch (s) {
-                .static => |val| val,
-                .node => |n| n.next(),
-                .ptr => |ptr| ptr.*,
+                .single => |val| val,
+                .list => |list| &list.items[n],
             };
         }
     };
 }
 
-test "Node" {
-    var test_node = TestNode{};
-    var node = test_node.node();
+pub const Node = struct {
+    id: []const u8 = "x",
+    num_inlets: u8 = undefined,
+    num_outlets: u8 = undefined,
+    inlets: [8]Portlet = undefined,
+    outlets: [8]Portlet = undefined,
+    ptr: *anyopaque,
+    processFn: *const fn (*anyopaque) void,
+    portletFn: *const fn (*anyopaque, []const u8) Portlet,
 
-    try testing.expectEqual(1.0, node.next());
-    try testing.expectEqual(2.0, node.next());
-}
+    const Portlet = Let(?Signal);
 
-test "Signal" {
-    const static_signal: Signal(f32) = .{ .static = 2.0 };
-    try testing.expectEqual(2.0, static_signal.get());
-    try testing.expectEqual(2.0, static_signal.get());
+    pub fn init(ptr: *anyopaque, T: type) Node {
+        const concrete: *T = @ptrCast(@alignCast(ptr));
+        const P = Ports(T, ?Signal);
+        var node: Node = .{
+            .ptr = ptr,
+            .id = concrete.id,
+            .processFn = &T.process,
+            .portletFn = &P.get,
+        };
 
-    var test_node = TestNode{};
-    var node = test_node.node();
-    var src_signal: Signal(f32) = node.signal();
+        const p_ins = P.ins(ptr);
+        const p_outs = P.outs(ptr);
 
-    try testing.expectEqual(1.0, src_signal.get());
-    try testing.expectEqual(2.0, src_signal.get());
-    try testing.expectEqual(3.0, src_signal.get());
-    try testing.expectEqual(4.0, src_signal.get());
+        node.num_inlets = p_ins.len;
+        node.num_outlets = p_outs.len;
 
-    var val: f32 = 1.0;
-    const ptr_signal: Signal(f32) = .{ .ptr = &val };
+        std.mem.copyForwards(Portlet, node.inlets[0..], p_ins[0..]);
+        std.mem.copyForwards(Portlet, node.outlets[0..], p_outs[0..]);
 
-    try testing.expectEqual(1.0, ptr_signal.get());
+        return node;
+    }
 
-    val = 5.0;
-    try testing.expectEqual(5.0, ptr_signal.get());
-}
+    pub fn process(n: Node) void {
+        n.processFn(n.ptr);
+    }
 
-test "Signal w/ context" {
-    var context = AudioContext{
-        .sample_rate = 44_100,
-        .ticks = 0,
-        .sink = null,
+    pub fn ins(n: *Node) []Portlet {
+        return n.inlets[0..n.num_inlets];
+    }
+
+    pub fn in(n: Node, idx: usize) Portlet {
+        // assert idx no greater than inlet count
+        return n.inlets[idx];
+    }
+
+    pub fn out(n: Node, idx: usize) Portlet {
+        // assert idx no greater than inlet count
+        return n.outlets[idx];
+    }
+
+    pub fn outs(n: *Node) []Portlet {
+        return n.outlets[0..n.num_outlets];
+    }
+
+    pub fn port(n: Node, field_name: []const u8) Portlet {
+        return n.portletFn(n.ptr, field_name);
+    }
+};
+
+//TODO: distinguish between ptrs and node-derived signals
+pub const Signal = union(enum) {
+    ptr: struct { val: *f32, src_node: *Node },
+    static: f32,
+
+    pub fn get(s: Signal) f32 {
+        return switch (s) {
+            .ptr => |ptr_s| ptr_s.val.*,
+            .static => |val| val,
+        };
+    }
+
+    pub fn set(s: Signal, v: f32) void {
+        switch (s) {
+            .ptr => |ptr_s| {
+                ptr_s.val.* = v;
+            },
+            .static => {
+                return;
+            },
+        }
+    }
+
+    pub fn source(s: Signal) ?*Node {
+        return switch (s) {
+            .ptr => |ptr_s| ptr_s.src_node,
+            .static => null,
+        };
+    }
+};
+
+// https://zigbin.io/9222cb
+// shoutouts to Francis on the forums
+
+pub fn Ports(comptime T: anytype, comptime S: anytype) type {
+    // Serves as an interface to a concrete class's input and output.
+    // Upstream types must designate which fields are input and output data through
+    // FieldEnum arrays.
+
+    // S type designates the expected type for inputs and outputs. For now, all inputs and outputs are expected to
+    // be the same type, because I can't quite figure out how to make lists of heterogeneous pointers work ergonomically at runtime.
+    // eg. how do we provide Signal types that don't care what their Child type is?
+    // idea: Signals as union types, like before
+
+    // Placeholder
+    //const S = ?Context.Signal(f32);
+
+    return struct {
+        t: *T,
+
+        const Self = @This();
+        const FE = std.meta.FieldEnum(T);
+        pub const L = Let(S);
+
+        pub fn ins(ptr: *anyopaque) [T.ins.len]L {
+            var t: *T = @ptrCast(@alignCast(ptr));
+            var buf: [T.ins.len]L = undefined;
+
+            inline for (T.ins, 0..) |port, idx| {
+                const field_ptr = &@field(t, @tagName(port));
+                buf[idx] = switch (std.meta.FieldType(T, port)) {
+                    S => .{ .single = field_ptr },
+                    std.ArrayList(S) => .{ .list = field_ptr },
+                    else => unreachable,
+                };
+            }
+
+            return buf;
+        }
+
+        pub fn outs(ptr: *anyopaque) [T.outs.len]L {
+            var t: *T = @ptrCast(@alignCast(ptr));
+            var buf: [T.outs.len]L = undefined;
+
+            inline for (T.outs, 0..) |port, idx| {
+                const field_ptr = &@field(t, @tagName(port));
+                buf[idx] = switch (std.meta.FieldType(T, port)) {
+                    S => .{ .single = field_ptr },
+                    std.ArrayList(S) => .{ .list = field_ptr },
+                    else => unreachable,
+                };
+            }
+
+            return buf;
+        }
+
+        pub fn get(ptr: *anyopaque, field_str: []const u8) L {
+            const t: *T = @ptrCast(@alignCast(ptr));
+
+            inline for (T.ins) |in| {
+                if (std.mem.eql(u8, @tagName(in), field_str)) {
+                    const field_ptr = &@field(t, @tagName(in));
+
+                    return switch (std.meta.FieldType(T, in)) {
+                        S => .{ .single = field_ptr },
+                        std.ArrayList(S) => .{ .list = field_ptr },
+                        else => unreachable,
+                    };
+                }
+            }
+
+            inline for (T.outs) |out| {
+                if (std.mem.eql(u8, @tagName(out), field_str)) {
+                    const field_ptr = &@field(t, @tagName(out));
+
+                    return switch (std.meta.FieldType(T, out)) {
+                        S => .{ .single = field_ptr },
+                        std.ArrayList(S) => .{ .list = field_ptr },
+                        else => unreachable,
+                    };
+                }
+            }
+
+            unreachable;
+        }
+
+        pub fn getIn(ptr: *anyopaque, comptime idx: usize) *std.meta.FieldType(T, T.ins[idx]) {
+            const t: *T = @ptrCast(@alignCast(ptr));
+
+            return &@field(t, @tagName(T.ins[idx]));
+        }
+
+        pub fn getOut(ptr: *anyopaque, comptime idx: usize) *std.meta.FieldType(T, T.outs[idx]) {
+            const t: *T = @ptrCast(@alignCast(ptr));
+
+            return &@field(t, @tagName(T.outs[idx]));
+        }
+
+        pub fn getPtr(ptr: *anyopaque, comptime fe: FE) *std.meta.FieldType(T, fe) {
+            const t: *T = @ptrCast(@alignCast(ptr));
+            return &@field(t, @tagName(fe));
+        }
     };
-    var node = TestNode{ .ctx = &context };
+}
 
-    var n = node.node();
+test "Ports" {
+    const PortNode = struct {
+        in_one: []const u8 = "1",
+        in_two: []const u8 = "2",
+        in_three: []const u8 = "3",
+        drive_in: []const u8 = "no",
+        out_back: []const u8 = "yes",
+        steak_house: f32 = 9999.0,
 
-    const src_signal: Signal(f32) = n.signal();
+        pub const ins = [_]std.meta.FieldEnum(@This()){ .in_one, .in_two, .in_three };
+        pub const outs = [_]std.meta.FieldEnum(@This()){.out_back};
+    };
+    var node = PortNode{};
 
-    context.sink = src_signal;
+    const P = Ports(PortNode, []const u8);
 
-    try testing.expectEqual(1.0, context.next());
-    try testing.expectEqual(2.0, context.next());
-    try testing.expectEqual(3.0, context.next());
-    try testing.expectEqual(4.0, context.next());
+    // TODO: workshop
+    // var ins_buf: [8]P.L = undefined;
+    // try testing.expectEqualSlices(*const []const u8, &.{ &node.in_one, &node.in_two, &node.in_three }, P.ins(&node, &ins_buf));
+    //
+    try testing.expectEqual(@TypeOf(P.getPtr(&node, .out_back)), *[]const u8);
+    try testing.expectEqual(@TypeOf(P.getPtr(&node, .steak_house)), *f32);
+
+    const in_two = P.get(&node, "in_two");
+    in_two.single.* = P.getOut(&node, 0).*;
+
+    try testing.expectEqual(P.getPtr(&node, .in_two).*, P.getPtr(&node, .out_back).*);
 }

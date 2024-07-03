@@ -1,15 +1,18 @@
 const std = @import("std");
 const zounds = @import("zounds");
 
+const Signal = zounds.signals.Signal;
+const Node = zounds.signals.Node;
+
 // simple LFO
 const Wobble = struct {
     ctx: *zounds.signals.Context,
     id: []const u8 = "wobb",
-    base_pitch: ?zounds.signals.Context.Signal = .{ .static = 440.0 },
-    frequency: ?zounds.signals.Context.Signal = .{ .static = 10.0 },
+    base_pitch: ?Signal = .{ .static = 440.0 },
+    frequency: ?Signal = .{ .static = 10.0 },
 
-    amp: ?zounds.signals.Context.Signal = .{ .static = 10.0 },
-    out: ?zounds.signals.Context.Signal = null,
+    amp: ?Signal = .{ .static = 10.0 },
+    out: ?Signal = null,
     phase: f32 = 0,
 
     pub const ins = .{ .base_pitch, .frequency, .amp };
@@ -34,8 +37,8 @@ const Wobble = struct {
         w.out.?.set(result);
     }
 
-    pub fn node(ptr: *Wobble) zounds.signals.Context.Node {
-        return zounds.signals.Context.Node.init(ptr, Wobble);
+    pub fn node(ptr: *Wobble) Node {
+        return Node.init(ptr, Wobble);
     }
 };
 
@@ -55,7 +58,7 @@ pub fn main() !void {
 
     var signal_ctx = try zounds.signals.Context.init(alloc);
 
-    var new_osc_a = zounds.signals.Context.Oscillator{
+    var new_osc_a = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
         .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
         .amp = .{ .static = 1.0 },
@@ -66,13 +69,14 @@ pub fn main() !void {
 
     var wobb = Wobble{
         .ctx = &signal_ctx,
+        .frequency = .{ .static = 50.0 },
         .base_pitch = .{ .static = zounds.utils.pitchFromNote(63) },
     };
     var wobb_node = wobb.node();
 
     _ = try signal_ctx.registerNode(&wobb_node);
 
-    var new_osc_b = zounds.signals.Context.Oscillator{
+    var new_osc_b = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
         .pitch = wobb.out,
         .amp = .{ .static = 1.0 },
@@ -81,7 +85,7 @@ pub fn main() !void {
 
     _ = try signal_ctx.registerNode(&new_osc_node_b);
 
-    var new_osc_c = zounds.signals.Context.Oscillator{
+    var new_osc_c = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
         .pitch = .{ .static = zounds.utils.pitchFromNote(67) },
         .amp = .{ .static = 1.0 },
@@ -90,7 +94,7 @@ pub fn main() !void {
 
     _ = try signal_ctx.registerNode(&new_osc_node_c);
 
-    var new_osc_d = zounds.signals.Context.Oscillator{
+    var new_osc_d = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
         .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
         .amp = .{ .static = 1.0 },
@@ -99,7 +103,7 @@ pub fn main() !void {
 
     _ = try signal_ctx.registerNode(&new_osc_node_d);
 
-    var new_chord = try zounds.signals.Context.ConcreteSink.init(&signal_ctx);
+    var new_chord = try zounds.dsp.Sink.init(&signal_ctx);
     // TODO: cant release memory without ensuring the render thread is done first
     //defer new_chord.deinit();
 
@@ -148,7 +152,7 @@ pub fn main() !void {
             .duration = .{ .seconds = 0.3 },
         },
     };
-    _ = adsr; // autofix
+    _ = adsr;
 
     signal_ctx.sink = new_chord.out;
     _ = try signal_ctx.refreshNodeList();
