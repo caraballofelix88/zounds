@@ -56,6 +56,19 @@ pub fn build(b: *std.Build) void {
     // This will evaluate the `test` step rather than the default, which is "install".
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_main_tests.step);
+
+    const check_exe = b.addExecutable(.{
+        .name = example_name,
+        .root_source_file = .{ .path = exe_path },
+        .target = target,
+        .optimize = optimize,
+    });
+    check_exe.root_module.addImport("zounds", mod);
+
+    linkPlatformFrameworks(target, check_exe);
+
+    const check_step = b.step("check", "compile without emitting for diagnostics");
+    check_step.dependOn(&check_exe.step);
 }
 
 pub fn linkPlatformFrameworks(target: std.Build.ResolvedTarget, step: *std.Build.Step.Compile) void {
