@@ -155,8 +155,7 @@ pub fn main() !void {
     _ = adsr;
 
     signal_ctx.sink = new_chord.out;
-    _ = try signal_ctx.refreshNodeList();
-    wobb_node.process();
+    _ = try signal_ctx.node_list.?.append(wobb_node);
 
     std.debug.print("node list:\t", .{});
     for (signal_ctx.node_list.?) |n| {

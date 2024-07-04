@@ -9,7 +9,7 @@ pub const envelope = @import("envelope.zig");
 pub const signals = @import("signals.zig");
 pub const midi = @import("midi.zig");
 pub const backends = @import("backends/backends.zig");
-pub const dsp = @import("dsp.zig");
+pub const dsp = @import("dsp/dsp.zig");
 
 // TODO: midi client backends
 pub const coreaudio = @import("backends/coreaudio.zig");

@@ -5,12 +5,12 @@ const main = @import("main.zig");
 const osc = @import("sources/osc.zig");
 const sources = @import("sources/main.zig");
 
-const dsp = @import("dsp.zig");
+const dsp = @import("dsp/dsp.zig");
 
 pub const Context = struct {
     alloc: std.mem.Allocator,
     scratch: []f32,
-    node_list: ?[]*Node = null, // why is this optional lol ////// Actually, why not just a static array?
+    node_list: ?[]*Node = null, // why is this optional lol -- Actually, why not just a static array?
     // TODO: what's the value of optional signals? maybe replace with static defaults across the board?
     sink: ?Signal = null, // why optional? could just be a static default val instead
     sample_rate: u32 = 44_100,
