@@ -9,8 +9,7 @@ pub const Context = struct {
     alloc: std.mem.Allocator,
     scratch: []f32,
     node_list: ?[]*Node = null, // why is this optional lol -- Actually, why not just a static array?
-    // TODO: what's the value of optional signals? maybe replace with static defaults across the board?
-    sink: ?Signal = null, // why optional? could just be a static default val instead
+    sink: Signal = .{ .static = 0.0 },
     sample_rate: u32 = 44_100,
     inv_sample_rate: f32 = 1.0 / 44_100.0,
     ticks: u64 = 0,
@@ -54,8 +53,8 @@ pub const Context = struct {
     pub const ConcreteA = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteA",
-        in: ?Signal = null,
-        out: ?Signal = null,
+        in: Signal = .{ .static = 1.0 },
+        out: Signal = .{ .static = 0.0 },
 
         pub const ins = [_]std.meta.FieldEnum(ConcreteA){.in};
         pub const outs = [_]std.meta.FieldEnum(ConcreteA){.out};
@@ -69,14 +68,7 @@ pub const Context = struct {
                 return;
             }
 
-            const in = blk: {
-                if (n.in) |in| {
-                    break :blk in.get();
-                }
-                break :blk 1.0;
-            };
-
-            n.out.?.set(in * 5.0);
+            n.out.set(n.in.get() * 5.0);
         }
 
         pub fn node(self: *ConcreteA) Node {
@@ -87,15 +79,15 @@ pub const Context = struct {
     pub const ConcreteSink = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteSink",
-        inputs: std.ArrayList(?Signal),
-        out: ?Signal = null,
+        inputs: std.ArrayList(Signal),
+        out: Signal = .{ .static = 0.0 },
 
         pub const ins = [_]std.meta.FieldEnum(ConcreteSink){.inputs};
         pub const outs = [_]std.meta.FieldEnum(ConcreteSink){.out};
 
         // use ctx.alloc for now
         pub fn init(ctx: *Context) !ConcreteSink {
-            const inputs = std.ArrayList(?Signal).init(ctx.alloc);
+            const inputs = std.ArrayList(Signal).init(ctx.alloc);
             return .{
                 .ctx = ctx,
                 .inputs = inputs,
@@ -116,15 +108,13 @@ pub const Context = struct {
             var result: f32 = undefined;
             var input_count: u8 = 0;
 
-            for (sink.inputs.items) |maybe_in| {
-                if (maybe_in) |in| {
-                    result += in.get();
-                    input_count += 1;
-                }
+            for (sink.inputs.items) |in| {
+                result += in.get();
+                input_count += 1;
             }
 
             result /= @floatFromInt(@max(input_count, 1));
-            sink.out.?.set(result);
+            sink.out.set(result);
         }
 
         pub fn node(self: *ConcreteSink) Node {
@@ -153,7 +143,7 @@ pub const Context = struct {
 
         sink_node.process();
 
-        try testing.expectEqual(4.0, sink_node.outs()[0].single.*.?.get());
+        try testing.expectEqual(4.0, sink_node.outs()[0].single.*.get());
     }
 
     test "ConcreteA node interface" {
@@ -187,10 +177,13 @@ pub const Context = struct {
         var node_list = std.ArrayList(*Node).init(ctx.alloc);
 
         // reversing DFS for now, just to see if this works
-        if (ctx.sink == null) {
-            return;
+        switch (ctx.sink) {
+            .static => {
+                return;
+            },
+            else => {},
         }
-        var curr_node: ?*Node = ctx.sink.?.source();
+        var curr_node: ?*Node = ctx.sink.source();
         var prev_node: ?*Node = null;
 
         while (curr_node) |n| {
@@ -200,39 +193,40 @@ pub const Context = struct {
 
             for (n.ins()) |let| {
                 switch (let) {
-                    .single => |maybe_in| {
-                        if (maybe_in.*) |in_signal| {
-                            curr_node = in_signal.source();
-                            break;
+                    .single => |in_signal| {
+                        curr_node = in_signal.source();
+                        break;
+                    },
+                    .maybe => |maybe_signal| {
+                        if (maybe_signal.*) |sig| {
+                            curr_node = sig.source();
                         } else {
                             curr_node = null;
                         }
+                        break;
                     },
                     .list => |list| {
-                        for (list.items) |maybe_sig| {
-                            if (maybe_sig) |sig| {
-                                // check for node presence before slapping onto node list
-                                if (!std.mem.containsAtLeast(*Node, node_list.items, 1, &.{sig.source().?})) {
-                                    const maybe_list_src = sig.source();
-                                    node_list.append(maybe_list_src.?) catch |e| {
-                                        std.debug.print("huh? {}\n", .{e});
-                                    };
+                        for (list.items) |sig| {
+                            // check for node presence before slapping onto node list
+                            if (!std.mem.containsAtLeast(*Node, node_list.items, 1, &.{sig.source().?})) {
+                                const maybe_list_src = sig.source();
+                                node_list.append(maybe_list_src.?) catch |e| {
+                                    std.debug.print("huh? {}\n", .{e});
+                                };
 
-                                    if (maybe_list_src) |list_src| {
-                                        if (list_src.num_inlets == 0) {
-                                            break;
-                                        }
-                                        if (list_src.in(0).single.*) |in_sig| {
-                                            if (in_sig.source()) |in_sig_src| {
-                                                std.debug.print("in name: {s}\n", .{in_sig_src.id});
-                                                try node_list.append(in_sig_src);
-                                            }
-                                        }
+                                if (maybe_list_src) |list_src| {
+                                    if (list_src.num_inlets == 0) {
+                                        break;
+                                    }
+                                    const in_sig = list_src.in(0).single.*;
+                                    if (in_sig.source()) |in_sig_src| {
+                                        std.debug.print("in name: {s}\n", .{in_sig_src.id});
+                                        try node_list.append(in_sig_src);
                                     }
                                 }
                             }
-                            curr_node = null;
                         }
+                        curr_node = null;
                     },
                 }
             }
@@ -276,7 +270,7 @@ pub const Context = struct {
                     const out = node.outs()[0];
 
                     const out_val = switch (out) {
-                        .single => |val| val.*.?.get(),
+                        .single => |val| val.*.get(),
                         else => unreachable, // there shouldnt be any list-shaped outputs
                     };
 
@@ -327,8 +321,8 @@ pub const Context = struct {
 
         ctx.process(true);
 
-        try testing.expectEqual(5, node_a.port("out").single.*.?.get()); // TODO: goodness gracious would you look at this nonsense
-        try testing.expectEqual(5, ctx.sink.?.get());
+        try testing.expectEqual(5, node_a.port("out").single.*.get()); // TODO: goodness gracious would you look at this nonsense
+        try testing.expectEqual(5, ctx.sink.get());
         //
         // lil mini benchmark
         for (0..44_100) |_| {
@@ -345,7 +339,7 @@ pub const Context = struct {
         // tick counter
         ctx.ticks += 1;
 
-        return ctx.sink.?.get();
+        return ctx.sink.get();
     }
 
     // TODO: unregistering, i guess
@@ -360,8 +354,11 @@ pub const Context = struct {
 
         node.out(0).single.* = signal;
 
-        if (ctx.sink == null) {
-            ctx.sink = signal;
+        switch (ctx.sink) {
+            .static => {
+                ctx.sink = signal;
+            },
+            else => {},
         }
 
         try refreshNodeList(ctx);
@@ -411,9 +408,9 @@ pub const Context = struct {
     pub const ConcreteB = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteB",
-        in: ?Signal = null,
-        multiplier: ?Signal = null,
-        out: ?Signal = null,
+        in: Signal = .{ .static = 1.0 },
+        multiplier: Signal = .{ .static = 1.0 },
+        out: Signal = .{ .static = 0.0 },
 
         pub const ins = [_]std.meta.FieldEnum(ConcreteB){ .in, .multiplier };
         pub const outs = [_]std.meta.FieldEnum(ConcreteB){.out};
@@ -427,21 +424,7 @@ pub const Context = struct {
                 return;
             }
 
-            const multi = blk: {
-                if (n.multiplier) |m| {
-                    break :blk m.get();
-                }
-                break :blk 1.0;
-            };
-
-            const in = blk: {
-                if (n.in) |in| {
-                    break :blk in.get();
-                }
-                break :blk 1.0;
-            };
-
-            n.out.?.set(in * multi + 5.0);
+            n.out.set(n.in.get() * n.multiplier.get() + 5.0);
         }
 
         pub fn node(self: *ConcreteB) Node {
@@ -458,6 +441,7 @@ test "new context" {
 pub fn Let(T: type) type {
     return union(enum) {
         single: *T,
+        maybe: *?T,
         list: *std.ArrayList(T),
 
         const Self = @This();
@@ -466,6 +450,7 @@ pub fn Let(T: type) type {
             const n = idx orelse 0;
             return switch (s) {
                 .single => |val| val,
+                .maybe => |maybe_val| maybe_val.?,
                 .list => |list| &list.items[n],
             };
         }
@@ -482,11 +467,11 @@ pub const Node = struct {
     processFn: *const fn (*anyopaque) void,
     portletFn: *const fn (*anyopaque, []const u8) Portlet,
 
-    const Portlet = Let(?Signal);
+    const Portlet = Let(Signal);
 
     pub fn init(ptr: *anyopaque, T: type) Node {
         const concrete: *T = @ptrCast(@alignCast(ptr));
-        const P = Ports(T, ?Signal);
+        const P = Ports(T, Signal);
         var node: Node = .{
             .ptr = ptr,
             .id = concrete.id,
@@ -577,9 +562,6 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
     // eg. how do we provide Signal types that don't care what their Child type is?
     // idea: Signals as union types, like before
 
-    // Placeholder
-    //const S = ?Signal(f32);
-
     return struct {
         t: *T,
 
@@ -595,6 +577,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
                 const field_ptr = &@field(t, @tagName(port));
                 buf[idx] = switch (std.meta.FieldType(T, port)) {
                     S => .{ .single = field_ptr },
+                    ?S => .{ .maybe = field_ptr },
                     std.ArrayList(S) => .{ .list = field_ptr },
                     else => unreachable,
                 };
@@ -611,6 +594,8 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
                 const field_ptr = &@field(t, @tagName(port));
                 buf[idx] = switch (std.meta.FieldType(T, port)) {
                     S => .{ .single = field_ptr },
+                    ?S => .{ .maybe = field_ptr },
+
                     std.ArrayList(S) => .{ .list = field_ptr },
                     else => unreachable,
                 };
@@ -628,6 +613,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
 
                     return switch (std.meta.FieldType(T, in)) {
                         S => .{ .single = field_ptr },
+                        ?S => .{ .maybe = field_ptr },
                         std.ArrayList(S) => .{ .list = field_ptr },
                         else => unreachable,
                     };
@@ -640,6 +626,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
 
                     return switch (std.meta.FieldType(T, out)) {
                         S => .{ .single = field_ptr },
+                        ?S => .{ .maybe = field_ptr },
                         std.ArrayList(S) => .{ .list = field_ptr },
                         else => unreachable,
                     };

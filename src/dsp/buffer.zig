@@ -11,14 +11,14 @@ pub const BufferPlayback = struct {
 
     should_loop: bool = true,
 
-    out: ?signals.Signal = null,
+    out: signals.Signal = .{ .static = 0.0 },
 
     pub const ins = .{};
     pub const outs = .{.out};
 
     pub fn process(ptr: *anyopaque) void {
         const p: *BufferPlayback = @ptrCast(@alignCast(ptr));
-        if (!p.hasNext() or p.out == null) {
+        if (!p.hasNext()) {
             return;
         }
 
@@ -35,7 +35,7 @@ pub const BufferPlayback = struct {
             p.head = 0;
         }
 
-        p.out.?.set(std.mem.bytesToValue(f32, slice));
+        p.out.set(std.mem.bytesToValue(f32, slice));
     }
 
     fn hasNext(p: BufferPlayback) bool {

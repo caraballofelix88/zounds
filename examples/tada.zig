@@ -8,11 +8,11 @@ const Node = zounds.signals.Node;
 const Wobble = struct {
     ctx: *zounds.signals.Context,
     id: []const u8 = "wobb",
-    base_pitch: ?Signal = .{ .static = 440.0 },
-    frequency: ?Signal = .{ .static = 10.0 },
+    base_pitch: Signal = .{ .static = 440.0 },
+    frequency: Signal = .{ .static = 10.0 },
 
-    amp: ?Signal = .{ .static = 10.0 },
-    out: ?Signal = null,
+    amp: Signal = .{ .static = 10.0 },
+    out: Signal = .{ .static = 0.0 },
     phase: f32 = 0,
 
     pub const ins = .{ .base_pitch, .frequency, .amp };
@@ -21,20 +21,15 @@ const Wobble = struct {
     pub fn process(ptr: *anyopaque) void {
         var w: *Wobble = @ptrCast(@alignCast(ptr));
 
-        // TODO: maybe node should enforce this
-        if (w.out == null) {
-            return;
-        }
+        const result = w.base_pitch.get() + w.amp.get() * std.math.sin(w.phase);
 
-        const result = w.base_pitch.?.get() + w.amp.?.get() * std.math.sin(w.phase);
-
-        w.phase += std.math.tau * w.frequency.?.get() * w.ctx.inv_sample_rate;
+        w.phase += std.math.tau * w.frequency.get() * w.ctx.inv_sample_rate;
 
         while (w.phase >= std.math.tau) {
             w.phase -= std.math.tau;
         }
 
-        w.out.?.set(result);
+        w.out.set(result);
     }
 
     pub fn node(ptr: *Wobble) Node {
