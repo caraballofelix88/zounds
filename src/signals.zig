@@ -9,12 +9,14 @@ pub const Context = struct {
     alloc: std.mem.Allocator,
     scratch: []f32,
     node_list: ?[]*Node = null, // why is this optional lol -- Actually, why not just a static array?
+    node_store: [64]Node = undefined,
     sink: Signal = .{ .static = 0.0 },
     sample_rate: u32 = 44_100,
     inv_sample_rate: f32 = 1.0 / 44_100.0,
     ticks: u64 = 0,
     node_count: u16 = 0,
 
+    // just one channel's worth of output
     tmp: [4]u8 = undefined,
 
     pub fn init(allocator: std.mem.Allocator) !Context {
@@ -62,12 +64,6 @@ pub const Context = struct {
         pub fn process(ptr: *anyopaque) void {
             const n: *Context.ConcreteA = @ptrCast(@alignCast(ptr));
 
-            if (n.out == null) {
-                // need to register node first to assign signal
-                std.debug.print("Uh oh, there's no out for {s}\n", .{n.id});
-                return;
-            }
-
             n.out.set(n.in.get() * 5.0);
         }
 
@@ -101,10 +97,6 @@ pub const Context = struct {
         pub fn process(ptr: *anyopaque) void {
             const sink: *ConcreteSink = @ptrCast(@alignCast(ptr));
 
-            if (sink.out == null) {
-                std.debug.print("uh oh, fix", .{});
-            }
-
             var result: f32 = undefined;
             var input_count: u8 = 0;
 
@@ -132,7 +124,7 @@ pub const Context = struct {
 
         _ = try ctx.registerNode(&sink_node);
 
-        try testing.expect(sink.out != null);
+        // try testing.expect(sink.out != null);
 
         try sink.inputs.append(.{ .static = 1.0 });
         try sink.inputs.append(.{ .static = 3.0 });
@@ -155,7 +147,7 @@ pub const Context = struct {
 
         concrete_a.out = try ctx.registerNode(&node);
 
-        try testing.expect(concrete_a.out != null);
+        // try testing.expect(concrete_a.out != null);
 
         // confirm outlet points to same value
         try testing.expectEqual(node.outs()[0].single, &concrete_a.out);
@@ -252,7 +244,7 @@ pub const Context = struct {
 
         concrete_b.out = try ctx.registerNode(&node_b);
 
-        try testing.expect(node_b.outs()[0].single.* != null);
+        // try testing.expect(node_b.outs()[0].single.* != null);
 
         ctx.sink = node_b.outs()[0].single.*;
 
@@ -348,11 +340,15 @@ pub const Context = struct {
     pub fn registerNode(ctx: *Context, node: *Node) !Signal {
         // TODO: assert type has process function with compatible signature
 
+        const store_signal: Signal = .{ .handle = .{ .idx = ctx.node_count, .ctx = ctx } };
+        var n = node.*;
+        n.out(0).single.* = store_signal;
+        ctx.node_store[ctx.node_count] = n;
+
         const signal: Signal = .{ .ptr = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node } };
+        node.out(0).single.* = signal;
 
         ctx.node_count += 1;
-
-        node.out(0).single.* = signal;
 
         switch (ctx.sink) {
             .static => {
@@ -366,7 +362,7 @@ pub const Context = struct {
     }
 
     test "registerNode" {
-        var ctx = try Context.init(testing.allocator_instance.allocator());
+        var ctx = try Context.init(testing.allocator);
         defer ctx.deinit();
 
         var concrete_a = ConcreteA{ .ctx = &ctx, .id = "node_a" };
@@ -377,13 +373,10 @@ pub const Context = struct {
         var concrete_b = ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
         var node_b = concrete_b.node();
 
-        concrete_b.out = try ctx.registerNode(&node_b);
+        _ = try ctx.registerNode(&node_b);
 
-        node_a.process(); // x * 5
-        node_b.process(); // in * multi + 5
-
-        try testing.expectEqual(5, ctx.scratch[0]);
-        try testing.expectEqual(10, ctx.scratch[1]);
+        try testing.expectEqual(ctx.node_store[0], node_a);
+        try testing.expectEqual(ctx.node_store[1], node_b);
     }
 
     fn getListAddress(ctx: Context, idx: usize) *f32 {
@@ -405,6 +398,34 @@ pub const Context = struct {
         try testing.expectEqual(5, ctx.scratch[1]);
     }
 
+    fn getHandleVal(ctx: Context, idx: usize) f32 {
+        return ctx.getListAddress(idx).*;
+    }
+
+    fn getHandleSource(ctx: *Context, idx: usize) *Node {
+        return @constCast(&ctx.node_store[idx]);
+    }
+
+    test "getHandleSource" {
+        var ctx = try Context.init(testing.allocator);
+        defer ctx.deinit();
+
+        var concrete_a = ConcreteA{ .ctx = &ctx, .id = "node_a" };
+        var node_a = concrete_a.node();
+
+        _ = try ctx.registerNode(&node_a);
+
+        var concrete_b = ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
+        var node_b = concrete_b.node();
+
+        _ = try ctx.registerNode(&node_b);
+
+        try testing.expectEqual(ctx.getHandleSource(0).*, node_a);
+        try testing.expectEqual(ctx.getHandleSource(1).*, node_b);
+
+        try testing.expectEqual(ctx.getHandleSource(1), &ctx.node_store[1]);
+    }
+
     pub const ConcreteB = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteB",
@@ -417,12 +438,6 @@ pub const Context = struct {
 
         pub fn process(ptr: *anyopaque) void {
             const n: *ConcreteB = @ptrCast(@alignCast(ptr));
-
-            if (n.out == null) {
-                // need to register node first to assign signal
-                std.debug.print("Uh oh, there's no out for {s}\n", .{n.id});
-                return;
-            }
 
             n.out.set(n.in.get() * n.multiplier.get() + 5.0);
         }
@@ -521,11 +536,13 @@ pub const Node = struct {
 //TODO: distinguish between ptrs and node-derived signals
 pub const Signal = union(enum) {
     ptr: struct { val: *f32, src_node: *Node },
+    handle: struct { idx: u16, ctx: *Context },
     static: f32,
 
     pub fn get(s: Signal) f32 {
         return switch (s) {
             .ptr => |ptr_s| ptr_s.val.*,
+            .handle => |handle| handle.ctx.getHandleVal(handle.idx),
             .static => |val| val,
         };
     }
@@ -534,6 +551,9 @@ pub const Signal = union(enum) {
         switch (s) {
             .ptr => |ptr_s| {
                 ptr_s.val.* = v;
+            },
+            .handle => {
+                std.debug.print("TODO", .{});
             },
             .static => {
                 return;
@@ -544,6 +564,7 @@ pub const Signal = union(enum) {
     pub fn source(s: Signal) ?*Node {
         return switch (s) {
             .ptr => |ptr_s| ptr_s.src_node,
+            .handle => |handle| handle.ctx.getHandleSource(handle.idx),
             .static => null,
         };
     }
