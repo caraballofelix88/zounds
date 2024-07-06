@@ -2,9 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const main = @import("main.zig");
-const osc = @import("sources/osc.zig");
 const sources = @import("sources/main.zig");
-
 const dsp = @import("dsp/dsp.zig");
 
 pub const Context = struct {
@@ -180,6 +178,7 @@ pub const Context = struct {
     }
 
     // TODO: NEXT: actually high time to navigate the node graph correctly
+    // turning into a mess
     // get topologically sorted list of nodes
     pub fn refreshNodeList(ctx: *Context) !void {
         if (ctx.node_list) |nodes| {
@@ -214,15 +213,21 @@ pub const Context = struct {
                             if (maybe_sig) |sig| {
                                 // check for node presence before slapping onto node list
                                 if (!std.mem.containsAtLeast(*Node, node_list.items, 1, &.{sig.source().?})) {
-                                    const list_src = sig.source();
-                                    try node_list.append(list_src.?);
+                                    const maybe_list_src = sig.source();
+                                    node_list.append(maybe_list_src.?) catch |e| {
+                                        std.debug.print("huh? {}\n", .{e});
+                                    };
 
-                                    if (list_src.?.in(0).single.*) |in_sig| {
-                                        if (in_sig.source()) |in_sig_src| {
-                                            std.debug.print("in name: {s}\n", .{in_sig_src.id});
-                                            try node_list.append(in_sig_src);
+                                    if (maybe_list_src) |list_src| {
+                                        if (list_src.num_inlets == 0) {
+                                            break;
                                         }
-                                        //try node_list.append(in);
+                                        if (list_src.in(0).single.*) |in_sig| {
+                                            if (in_sig.source()) |in_sig_src| {
+                                                std.debug.print("in name: {s}\n", .{in_sig_src.id});
+                                                try node_list.append(in_sig_src);
+                                            }
+                                        }
                                     }
                                 }
                             }

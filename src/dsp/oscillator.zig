@@ -39,7 +39,6 @@ pub const Oscillator = struct {
 
         const len: f32 = @floatFromInt(n.wavetable.len);
 
-
         const lowInd: usize = @intFromFloat(@floor(n.phase));
         const highInd: usize = @intFromFloat(@mod(@ceil(n.phase), len));
 

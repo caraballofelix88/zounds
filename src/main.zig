@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 pub const sources = @import("sources/main.zig");
-pub const osc = @import("sources/osc.zig");
 pub const wav = @import("readers/wav.zig");
 pub const utils = @import("utils.zig");
 pub const filters = @import("filters.zig");

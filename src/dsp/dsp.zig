@@ -1,3 +1,3 @@
 pub const Oscillator = @import("oscillator.zig").Oscillator;
 pub const Sink = @import("sink.zig").Sink;
-pub const Buffer = @import("buffer.zig").Buffer;
+pub const BufferPlayback = @import("buffer.zig").BufferPlayback;

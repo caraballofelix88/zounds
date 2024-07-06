@@ -124,7 +124,7 @@ pub fn main() !void {
     // file buffer
     const file_buf = try zounds.readers.wav.readWavFile(alloc, "res/PinkPanther30.wav");
 
-    var concrete_buf = zounds.dsp.Buffer{ .ctx = &signal_ctx, .buf = file_buf };
+    var concrete_buf = zounds.dsp.BufferPlayback{ .ctx = &signal_ctx, .buf = file_buf };
     var buf_node = concrete_buf.node();
     _ = try signal_ctx.registerNode(&buf_node);
 

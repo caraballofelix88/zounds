@@ -2,9 +2,9 @@ const std = @import("std");
 const signals = @import("../signals.zig");
 const main = @import("../main.zig");
 
-pub const Buffer = struct {
+pub const BufferPlayback = struct {
     ctx: *signals.Context,
-    id: []const u8 = "bufff",
+    id: []const u8 = "BufferPlayback",
     head: usize = 0,
     head_inc_counter: usize = 0,
     buf: main.AudioBuffer,
@@ -17,36 +17,36 @@ pub const Buffer = struct {
     pub const outs = .{.out};
 
     pub fn process(ptr: *anyopaque) void {
-        const i: *Buffer = @ptrCast(@alignCast(ptr));
-        if (!i.hasNext() or i.out == null) {
+        const p: *BufferPlayback = @ptrCast(@alignCast(ptr));
+        if (!p.hasNext() or p.out == null) {
             return;
         }
 
-        const slice = i.buf.buf[i.head..(i.head + i.buf.format.frameSize())];
+        const slice = p.buf.buf[p.head..(p.head + p.buf.format.frameSize())];
 
         // repeat samples based on ratio between actual and target sample rate
-        i.head_inc_counter += 1;
-        if (i.head_inc_counter >= i.sample_rate_ratio()) {
-            i.head_inc_counter = 0;
-            i.head += i.buf.format.frameSize();
+        p.head_inc_counter += 1;
+        if (p.head_inc_counter >= p.sample_rate_ratio()) {
+            p.head_inc_counter = 0;
+            p.head += p.buf.format.frameSize();
         }
 
-        if (i.head >= i.buf.buf.len and i.should_loop) {
-            i.head = 0;
+        if (p.head >= p.buf.buf.len and p.should_loop) {
+            p.head = 0;
         }
 
-        i.out.?.set(std.mem.bytesToValue(f32, slice));
+        p.out.?.set(std.mem.bytesToValue(f32, slice));
     }
 
-    fn hasNext(i: Buffer) bool {
-        return (i.head + i.buf.format.frameSize()) < i.buf.buf.len * i.sample_rate_ratio();
+    fn hasNext(p: BufferPlayback) bool {
+        return (p.head + p.buf.format.frameSize()) < p.buf.buf.len * p.sample_rate_ratio();
     }
 
-    fn sample_rate_ratio(b: Buffer) usize {
-        return b.ctx.sample_rate / b.buf.format.sample_rate;
+    fn sample_rate_ratio(p: BufferPlayback) usize {
+        return p.ctx.sample_rate / p.buf.format.sample_rate;
     }
 
-    pub fn node(b: *Buffer) signals.Node {
-        return signals.Node.init(b, Buffer);
+    pub fn node(p: *BufferPlayback) signals.Node {
+        return signals.Node.init(p, BufferPlayback);
     }
 };
