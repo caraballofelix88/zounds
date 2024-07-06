@@ -39,12 +39,10 @@ pub const WavFileData = struct {
 
 // TODO: maybe generalize file header parsing
 // Perhaps follow through with the "Field" stuff above?
-pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
-    var file = try std.fs.cwd().openFile(dir, .{});
-    defer file.close();
-
-    var buffer = std.io.bufferedReader(file.reader());
-    var reader = buffer.reader();
+// NOTE: duplicates input data, doesn't own the incoming slice
+pub fn readWav(alloc: std.mem.Allocator, data: []const u8) !main.AudioBuffer {
+    var buffer = std.io.fixedBufferStream(data);
+    const reader = buffer.reader();
 
     // read RIFF description
     const riff_bytes = try reader.readBytesNoEof(4);
@@ -94,6 +92,7 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
     _ = data_section_size;
 
     const slice = try reader.readAllAlloc(alloc, std.math.maxInt(usize));
+    defer alloc.free(slice);
 
     var base_buffer: main.AudioBuffer = .{
         .format = .{
@@ -119,12 +118,38 @@ pub fn readWav(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
     return base_buffer;
 }
 
-test "readWav" {
+pub fn readWavFile(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
+    var file = try std.fs.cwd().openFile(dir, .{});
+    defer file.close();
+
+    const file_buf = try file.readToEndAlloc(alloc, std.math.maxInt(u32));
+    defer alloc.free(file_buf);
+
+    return try readWav(alloc, file_buf);
+}
+
+test "readWavFile" {
     const dir = "res/evil_laugh.wav";
-    const file = try readWav(testing.allocator, dir);
+    const file = try readWavFile(testing.allocator, dir);
     defer testing.allocator.free(file.buf);
 
     try testing.expectEqual(44_100, file.format.sample_rate);
     try testing.expectEqual(.f32, file.format.sample_format);
     try testing.expectEqual(1, file.format.channels.len);
+}
+
+test "readWav" {
+    const dir = "res/evil_laugh.wav";
+    var file = try std.fs.cwd().openFile(dir, .{});
+    defer file.close();
+
+    const file_buf = try file.readToEndAlloc(testing.allocator, std.math.maxInt(u32));
+    defer testing.allocator.free(file_buf);
+
+    const buf = try readWav(testing.allocator, file_buf);
+    defer testing.allocator.free(buf.buf);
+
+    try testing.expectEqual(44_100, buf.format.sample_rate);
+    try testing.expectEqual(.f32, buf.format.sample_format);
+    try testing.expectEqual(1, buf.format.channels.len);
 }

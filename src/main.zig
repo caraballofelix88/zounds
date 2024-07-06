@@ -8,6 +8,7 @@ pub const filters = @import("filters.zig");
 pub const envelope = @import("envelope.zig");
 pub const signals = @import("signals.zig");
 pub const midi = @import("midi.zig");
+pub const readers = @import("readers/readers.zig");
 pub const backends = @import("backends/backends.zig");
 pub const dsp = @import("dsp/dsp.zig");
 
@@ -124,7 +125,7 @@ pub const FormatData = struct {
 
 pub const AudioBuffer = struct {
     format: FormatData,
-    buf: []u8,
+    buf: []const u8,
 
     pub fn sampleCount(b: AudioBuffer) usize {
         return b.buf.len / b.format.sample_format.size();

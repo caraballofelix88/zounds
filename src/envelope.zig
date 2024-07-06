@@ -190,7 +190,7 @@ pub const adsr: [4]Ramp = .{
 // TODO: rename to ADSR
 pub const Envelope = struct {
     ramps: []const Ramp,
-    trigger: signals.Signal(bool) = .{ .static = false },
+    trigger: signals.Signal,
     active: bool = false,
     prev_trigger_state: bool = false,
     ramp_index: usize = 0,
@@ -198,10 +198,10 @@ pub const Envelope = struct {
     sample_index: usize = 0,
     latest_value: f32 = 0.0,
 
-    pub fn init(ramps: []const Ramp, trigger: signals.Signal(bool)) Envelope {
+    pub fn init(ramps: []const Ramp, trigger: ?signals.Signal) Envelope {
         return .{
             .ramps = ramps,
-            .trigger = trigger,
+            .trigger = trigger orelse .{ .static = 0.0 },
             .curr_ramp = ramps[0],
         };
     }
@@ -209,7 +209,7 @@ pub const Envelope = struct {
     pub fn nextFn(ptr: *anyopaque) f32 {
         var e: *Envelope = @ptrCast(@alignCast(ptr));
 
-        if (e.trigger.get()) {
+        if (e.trigger.get() != 0.0) {
             if (!e.prev_trigger_state) {
                 e.attack();
             }
@@ -303,7 +303,7 @@ test "Envelope" {
     };
 
     var trigger: bool = false;
-    var e = Envelope.init(&ramps, .{ .ptr = &trigger });
+    var e = Envelope.init(&ramps, null);
 
     // test default value on inactive envelope
     try testing.expectEqual(0.0, Envelope.nextFn(&e));

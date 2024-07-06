@@ -56,8 +56,8 @@ pub const Context = struct {
     pub const ConcreteA = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteA",
-        in: ?Context.Signal = null,
-        out: ?Context.Signal = null,
+        in: ?Signal = null,
+        out: ?Signal = null,
 
         pub const ins = [_]std.meta.FieldEnum(ConcreteA){.in};
         pub const outs = [_]std.meta.FieldEnum(ConcreteA){.out};
@@ -89,15 +89,15 @@ pub const Context = struct {
     pub const ConcreteSink = struct {
         ctx: *Context,
         id: []const u8 = "ConcreteSink",
-        inputs: std.ArrayList(?Context.Signal),
-        out: ?Context.Signal = null,
+        inputs: std.ArrayList(?Signal),
+        out: ?Signal = null,
 
         pub const ins = [_]std.meta.FieldEnum(ConcreteSink){.inputs};
         pub const outs = [_]std.meta.FieldEnum(ConcreteSink){.out};
 
         // use ctx.alloc for now
         pub fn init(ctx: *Context) !ConcreteSink {
-            const inputs = std.ArrayList(?Context.Signal).init(ctx.alloc);
+            const inputs = std.ArrayList(?Signal).init(ctx.alloc);
             return .{
                 .ctx = ctx,
                 .inputs = inputs,
@@ -214,7 +214,16 @@ pub const Context = struct {
                             if (maybe_sig) |sig| {
                                 // check for node presence before slapping onto node list
                                 if (!std.mem.containsAtLeast(*Node, node_list.items, 1, &.{sig.source().?})) {
-                                    try node_list.append(sig.source().?);
+                                    const list_src = sig.source();
+                                    try node_list.append(list_src.?);
+
+                                    if (list_src.?.in(0).single.*) |in_sig| {
+                                        if (in_sig.source()) |in_sig_src| {
+                                            std.debug.print("in name: {s}\n", .{in_sig_src.id});
+                                            try node_list.append(in_sig_src);
+                                        }
+                                        //try node_list.append(in);
+                                    }
                                 }
                             }
                             curr_node = null;
@@ -564,7 +573,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
     // idea: Signals as union types, like before
 
     // Placeholder
-    //const S = ?Context.Signal(f32);
+    //const S = ?Signal(f32);
 
     return struct {
         t: *T,

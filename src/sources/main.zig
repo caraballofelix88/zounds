@@ -26,7 +26,7 @@ pub const SampleSource = struct {
     iterator: buffered.BufferIterator,
 
     pub fn init(alloc: std.mem.Allocator, path: []const u8) !SampleSource {
-        const buf = try wav.readWav(alloc, path);
+        const buf = try wav.readWavFile(alloc, path);
 
         const iterator = buffered.BufferIterator{ .buf = buf };
 

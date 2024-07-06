@@ -60,6 +60,7 @@ pub fn main() !void {
 
     var new_osc_a = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
+        .id = "osc_a",
         .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
         .amp = .{ .static = 1.0 },
     };
@@ -69,6 +70,7 @@ pub fn main() !void {
 
     var wobb = Wobble{
         .ctx = &signal_ctx,
+        .id = "wob",
         .frequency = .{ .static = 50.0 },
         .base_pitch = .{ .static = zounds.utils.pitchFromNote(63) },
     };
@@ -78,6 +80,7 @@ pub fn main() !void {
 
     var new_osc_b = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
+        .id = "osc_b",
         .pitch = wobb.out,
         .amp = .{ .static = 1.0 },
     };
@@ -87,6 +90,7 @@ pub fn main() !void {
 
     var new_osc_c = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
+        .id = "osc_c",
         .pitch = .{ .static = zounds.utils.pitchFromNote(67) },
         .amp = .{ .static = 1.0 },
     };
@@ -96,6 +100,7 @@ pub fn main() !void {
 
     var new_osc_d = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
+        .id = "osc_d",
         .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
         .amp = .{ .static = 1.0 },
     };
@@ -111,10 +116,21 @@ pub fn main() !void {
 
     _ = try signal_ctx.registerNode(&new_chord_node);
 
-    _ = try new_chord.inputs.append(new_osc_node_a.out(0).single.*);
-    _ = try new_chord.inputs.append(new_osc_node_b.out(0).single.*);
-    _ = try new_chord.inputs.append(new_osc_node_c.out(0).single.*);
-    _ = try new_chord.inputs.append(new_osc_node_d.out(0).single.*);
+    // _ = try new_chord.inputs.append(new_osc_node_a.out(0).single.*);
+    // _ = try new_chord.inputs.append(new_osc_node_b.out(0).single.*);
+    // _ = try new_chord.inputs.append(new_osc_node_c.out(0).single.*);
+    // _ = try new_chord.inputs.append(new_osc_node_d.out(0).single.*);
+    //
+    // file buffer
+    const file_buf = try zounds.readers.wav.readWavFile(alloc, "res/PinkPanther30.wav");
+
+    var concrete_buf = zounds.dsp.Buffer{ .ctx = &signal_ctx, .buf = file_buf };
+    var buf_node = concrete_buf.node();
+    _ = try signal_ctx.registerNode(&buf_node);
+
+    _ = try new_chord.inputs.append(buf_node.out(0).single.*);
+
+    _ = try signal_ctx.refreshNodeList();
 
     // TODO: audio context should derive its sample rate from available backend devices/formats
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
@@ -155,7 +171,7 @@ pub fn main() !void {
     _ = adsr;
 
     signal_ctx.sink = new_chord.out;
-    _ = try signal_ctx.node_list.?.append(wobb_node);
+    _ = try signal_ctx.refreshNodeList();
 
     std.debug.print("node list:\t", .{});
     for (signal_ctx.node_list.?) |n| {
