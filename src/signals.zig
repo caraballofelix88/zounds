@@ -5,33 +5,24 @@ const main = @import("main.zig");
 const sources = @import("sources/main.zig");
 const dsp = @import("dsp/dsp.zig");
 
+const MAX_NODE_COUNT = 64;
+const SCRATCH_BYTES = 1024;
+const NODE_PORTLET_COUNT = 8;
+
 pub const Context = struct {
-    alloc: std.mem.Allocator,
-    scratch: []f32,
-    node_list: ?[]*Node = null, // why is this optional lol -- Actually, why not just a static array?
-    node_store: [64]Node = undefined,
+    // alloc: std.mem.Allocator,
+    scratch: [SCRATCH_BYTES]f32 = std.mem.zeroes([SCRATCH_BYTES]f32),
+    node_store: [MAX_NODE_COUNT]Node = undefined,
+    node_ptr_list: [MAX_NODE_COUNT]*Node = undefined,
     sink: Signal = .{ .static = 0.0 },
     sample_rate: u32 = 44_100,
     inv_sample_rate: f32 = 1.0 / 44_100.0,
     ticks: u64 = 0,
     node_count: u16 = 0,
 
-    // just one channel's worth of output
+    // TODO: just one channel's worth of output
+    // Context should be aware of output format (channel count)
     tmp: [4]u8 = undefined,
-
-    pub fn init(allocator: std.mem.Allocator) !Context {
-        return .{
-            .alloc = allocator,
-            .scratch = try allocator.alloc(f32, 1024),
-        };
-    }
-
-    pub fn deinit(ctx: Context) void {
-        ctx.alloc.free(ctx.scratch);
-        if (ctx.node_list) |list| {
-            ctx.alloc.free(list);
-        }
-    }
 
     // Temp compatibility stuff
     pub fn nextFn(ptr: *anyopaque) ?[]u8 {
@@ -74,6 +65,7 @@ pub const Context = struct {
 
     pub const ConcreteSink = struct {
         ctx: *Context,
+        alloc: std.mem.Allocator,
         id: []const u8 = "ConcreteSink",
         inputs: std.ArrayList(Signal),
         out: Signal = .{ .static = 0.0 },
@@ -81,11 +73,11 @@ pub const Context = struct {
         pub const ins = [_]std.meta.FieldEnum(ConcreteSink){.inputs};
         pub const outs = [_]std.meta.FieldEnum(ConcreteSink){.out};
 
-        // use ctx.alloc for now
-        pub fn init(ctx: *Context) !ConcreteSink {
-            const inputs = std.ArrayList(Signal).init(ctx.alloc);
+        pub fn init(ctx: *Context, alloc: std.mem.Allocator) !ConcreteSink {
+            const inputs = std.ArrayList(Signal).init(alloc);
             return .{
                 .ctx = ctx,
+                .alloc = alloc,
                 .inputs = inputs,
             };
         }
@@ -115,39 +107,33 @@ pub const Context = struct {
     };
 
     test "sink node" {
-        var ctx = try Context.init(testing.allocator_instance.allocator());
-        defer ctx.deinit();
+        var ctx = Context{};
 
-        var sink = try ConcreteSink.init(&ctx);
+        var sink = try ConcreteSink.init(&ctx, testing.allocator);
         defer sink.deinit();
         var sink_node = sink.node();
 
         _ = try ctx.registerNode(&sink_node);
-
-        // try testing.expect(sink.out != null);
 
         try sink.inputs.append(.{ .static = 1.0 });
         try sink.inputs.append(.{ .static = 3.0 });
         try sink.inputs.append(.{ .static = 8.0 });
 
         // confirm outlet points to same value
-        try testing.expectEqual(sink_node.outs()[0].single, &sink.out);
+        try testing.expectEqual(sink_node.out(0).single, &sink.out);
 
         sink_node.process();
 
-        try testing.expectEqual(4.0, sink_node.outs()[0].single.*.get());
+        try testing.expectEqual(4.0, sink_node.out(0).single.*.get());
     }
 
     test "ConcreteA node interface" {
-        var ctx = try Context.init(testing.allocator_instance.allocator());
-        defer ctx.deinit();
+        var ctx = Context{};
 
         var concrete_a = ConcreteA{ .ctx = &ctx };
         var node = concrete_a.node();
 
         concrete_a.out = try ctx.registerNode(&node);
-
-        // try testing.expect(concrete_a.out != null);
 
         // confirm outlet points to same value
         try testing.expectEqual(node.outs()[0].single, &concrete_a.out);
@@ -159,80 +145,92 @@ pub const Context = struct {
         } };
     }
 
-    // TODO: NEXT: actually high time to navigate the node graph correctly
-    // turning into a mess
-    // get topologically sorted list of nodes
-    pub fn refreshNodeList(ctx: *Context) !void {
-        if (ctx.node_list) |nodes| {
-            ctx.alloc.free(nodes);
-        }
-        var node_list = std.ArrayList(*Node).init(ctx.alloc);
+    // TODO: check for cycles
+    pub fn nodeDepSort(ctx: *Context) !void {
+        var queue = std.fifo.LinearFifo(*Node, .{ .Static = MAX_NODE_COUNT }).init();
+        var indegrees: [MAX_NODE_COUNT]u8 = .{0} ** MAX_NODE_COUNT;
+        var sorted_idx: u8 = 0;
 
-        // reversing DFS for now, just to see if this works
-        switch (ctx.sink) {
-            .static => {
-                return;
-            },
-            else => {},
-        }
-        var curr_node: ?*Node = ctx.sink.source();
-        var prev_node: ?*Node = null;
-
-        while (curr_node) |n| {
-            try node_list.append(n);
-
-            prev_node = n;
-
-            for (n.ins()) |let| {
-                switch (let) {
-                    .single => |in_signal| {
-                        curr_node = in_signal.source();
-                        break;
-                    },
-                    .maybe => |maybe_signal| {
-                        if (maybe_signal.*) |sig| {
-                            curr_node = sig.source();
-                        } else {
-                            curr_node = null;
+        for (0..ctx.node_count) |idx| {
+            var node = ctx.getHandleSource(idx);
+            for (node.ins()) |inlet| {
+                switch (inlet) {
+                    .single => |single| {
+                        if (single.* == .handle) {
+                            indegrees[idx] += 1;
                         }
-                        break;
                     },
                     .list => |list| {
-                        for (list.items) |sig| {
-                            // check for node presence before slapping onto node list
-                            if (!std.mem.containsAtLeast(*Node, node_list.items, 1, &.{sig.source().?})) {
-                                const maybe_list_src = sig.source();
-                                node_list.append(maybe_list_src.?) catch |e| {
-                                    std.debug.print("huh? {}\n", .{e});
-                                };
-
-                                if (maybe_list_src) |list_src| {
-                                    if (list_src.num_inlets == 0) {
-                                        break;
-                                    }
-                                    const in_sig = list_src.in(0).single.*;
-                                    if (in_sig.source()) |in_sig_src| {
-                                        std.debug.print("in name: {s}\n", .{in_sig_src.id});
-                                        try node_list.append(in_sig_src);
-                                    }
-                                }
+                        for (list.items) |i| {
+                            if (i == .handle) {
+                                indegrees[idx] += 1;
                             }
                         }
-                        curr_node = null;
                     },
+                    else => {},
+                }
+            }
+
+            if (indegrees[idx] == 0) {
+                try queue.writeItem(node);
+            }
+        }
+
+        while (queue.readItem()) |n| {
+            ctx.node_ptr_list[sorted_idx] = n;
+            sorted_idx += 1;
+            std.debug.print("pushing node {}, : {s}\n\n", .{ sorted_idx, n.id });
+
+            for (n.outs()) |out| {
+
+                // go through full node list to find nodes receiving out
+                // TODO: this could be fixed up
+                for (0..ctx.node_count) |idx| {
+                    var adj_node = ctx.getHandleSource(idx);
+
+                    for (adj_node.ins()) |in| {
+                        switch (in) {
+                            .single => |in_single| {
+                                if (out.single.* == .handle and in_single.* == .handle) {
+                                    if (out.single.*.handle.idx == in_single.*.handle.idx) {
+                                        std.debug.print("connection between {s} and {s}\n", .{ n.id, adj_node.id });
+
+                                        indegrees[idx] -= 1;
+                                        if (indegrees[idx] == 0) {
+                                            try queue.writeItem(adj_node);
+                                        }
+                                    }
+                                }
+                            },
+                            .list => |in_list| {
+                                for (in_list.items) |in_item| {
+                                    if (out.single.* == .handle and in_item == .handle) {
+                                        if (out.single.*.handle.idx == in_item.handle.idx) {
+                                            std.debug.print("connection between {s} and {s}\n", .{ n.id, adj_node.id });
+
+                                            indegrees[idx] -= 1;
+                                            if (indegrees[idx] == 0) {
+                                                try queue.writeItem(adj_node);
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                    }
                 }
             }
         }
 
-        std.mem.reverse(*const Node, node_list.items);
-
-        ctx.node_list = try node_list.toOwnedSlice();
+        if (sorted_idx < ctx.node_count) {
+            std.debug.print("uh oh, somethings up. Likely cycle found.\n", .{});
+        }
     }
 
-    // TODO:  Node graph traversal, sort out shape of signals and nodes
-    test "context getNodeList" {
-        var ctx = try Context.init(testing.allocator_instance.allocator());
-        defer ctx.deinit();
+    test "nodeDepSort" {
+        std.debug.print("hello\n", .{});
+        var ctx = Context{};
 
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
@@ -240,41 +238,44 @@ pub const Context = struct {
         _ = try ctx.registerNode(&node_a);
 
         var concrete_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
+        std.debug.print("node a out:\t{any}\n", .{node_a.out(0).single.*});
         var node_b = concrete_b.node();
 
         concrete_b.out = try ctx.registerNode(&node_b);
 
-        // try testing.expect(node_b.outs()[0].single.* != null);
+        try ctx.nodeDepSort();
+        ctx.printNodeList();
+    }
 
-        ctx.sink = node_b.outs()[0].single.*;
-
-        try ctx.refreshNodeList();
-
-        try testing.expectEqualSlices(*const Node, &.{ &node_a, &node_b }, ctx.node_list.?);
+    pub fn printNodeList(ctx: *Context) void {
+        std.debug.print("node list:\t", .{});
+        for (0..ctx.node_count) |idx| {
+            const n = ctx.node_ptr_list[idx];
+            std.debug.print("{s}, ", .{n.id});
+        }
+        std.debug.print("\n", .{});
     }
 
     pub fn process(ctx: *Context, should_print: bool) void {
         // for node in context graph, compute new values
-        if (ctx.node_list) |list| {
-            for (list) |node| {
-                node.process();
-                if (should_print == true) {
-                    const out = node.outs()[0];
+        for (0..ctx.node_count) |idx| {
+            var node = ctx.node_ptr_list[idx];
+            node.process();
+            if (should_print == true) {
+                const out = node.out(0);
 
-                    const out_val = switch (out) {
-                        .single => |val| val.*.get(),
-                        else => unreachable, // there shouldnt be any list-shaped outputs
-                    };
+                const out_val = switch (out) {
+                    .single => |val| val.*.get(),
+                    else => unreachable, // there shouldnt be any list-shaped outputs
+                };
 
-                    std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out_val });
-                }
+                std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out_val });
             }
         }
     }
 
     test "process" {
-        var ctx = try Context.init(testing.allocator_instance.allocator());
-        defer ctx.deinit();
+        var ctx = Context{};
 
         var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
@@ -292,7 +293,7 @@ pub const Context = struct {
         var osc_node = oscillator.node();
         _ = try ctx.registerNode(&osc_node);
 
-        var sink = try Context.ConcreteSink.init(&ctx);
+        var sink = try Context.ConcreteSink.init(&ctx, testing.allocator);
         defer sink.deinit();
         var sink_node = sink.node();
 
@@ -303,13 +304,6 @@ pub const Context = struct {
         _ = try ctx.registerNode(&sink_node);
 
         ctx.sink = sink_node.port("out").single.*;
-
-        try ctx.refreshNodeList();
-        std.debug.print("node list: ", .{});
-        for (ctx.node_list.?) |node| {
-            std.debug.print("{s}, ", .{node.*.id});
-        }
-        std.debug.print("\n", .{});
 
         ctx.process(true);
 
@@ -345,32 +339,23 @@ pub const Context = struct {
         n.out(0).single.* = store_signal;
         ctx.node_store[ctx.node_count] = n;
 
-        const signal: Signal = .{ .ptr = .{ .val = ctx.getListAddress(ctx.node_count), .src_node = node } };
-        node.out(0).single.* = signal;
-
         ctx.node_count += 1;
 
-        switch (ctx.sink) {
-            .static => {
-                ctx.sink = signal;
-            },
-            else => {},
-        }
+        // re-sort node processing list
+        try ctx.nodeDepSort();
 
-        try refreshNodeList(ctx);
-        return signal;
+        return store_signal;
     }
 
     test "registerNode" {
-        var ctx = try Context.init(testing.allocator);
-        defer ctx.deinit();
+        var ctx = Context{};
 
         var concrete_a = ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
 
         _ = try ctx.registerNode(&node_a);
 
-        var concrete_b = ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
+        var concrete_b = ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.out(0).single.* };
         var node_b = concrete_b.node();
 
         _ = try ctx.registerNode(&node_b);
@@ -379,13 +364,12 @@ pub const Context = struct {
         try testing.expectEqual(ctx.node_store[1], node_b);
     }
 
-    fn getListAddress(ctx: Context, idx: usize) *f32 {
-        return @constCast(&(ctx.scratch[idx]));
+    fn getListAddress(ctx: *Context, idx: usize) *f32 {
+        return &(ctx.scratch[idx]);
     }
 
     test "getListAddress" {
-        var ctx = try Context.init(testing.allocator_instance.allocator());
-        defer ctx.deinit();
+        var ctx = Context{};
 
         ctx.scratch[0] = 1;
         ctx.scratch[1] = 2;
@@ -398,8 +382,12 @@ pub const Context = struct {
         try testing.expectEqual(5, ctx.scratch[1]);
     }
 
-    fn getHandleVal(ctx: Context, idx: usize) f32 {
+    fn getHandleVal(ctx: *Context, idx: usize) f32 {
         return ctx.getListAddress(idx).*;
+    }
+
+    fn setHandleVal(ctx: *Context, idx: usize, val: f32) void {
+        ctx.scratch[idx] = val;
     }
 
     fn getHandleSource(ctx: *Context, idx: usize) *Node {
@@ -407,8 +395,7 @@ pub const Context = struct {
     }
 
     test "getHandleSource" {
-        var ctx = try Context.init(testing.allocator);
-        defer ctx.deinit();
+        var ctx = Context{};
 
         var concrete_a = ConcreteA{ .ctx = &ctx, .id = "node_a" };
         var node_a = concrete_a.node();
@@ -448,12 +435,11 @@ pub const Context = struct {
     };
 };
 
-test "new context" {
-    const ctx = try Context.init(testing.allocator_instance.allocator());
-    defer ctx.deinit();
-}
-
-pub fn Let(T: type) type {
+// TODO: unsatisfied with this dynamically sized outlet list stuff.
+// Figure out alternative before it permeates through too much of the workings
+//
+//
+pub fn Portlet(T: type) type {
     return union(enum) {
         single: *T,
         maybe: *?T,
@@ -476,13 +462,13 @@ pub const Node = struct {
     id: []const u8 = "x",
     num_inlets: u8 = undefined,
     num_outlets: u8 = undefined,
-    inlets: [8]Portlet = undefined,
-    outlets: [8]Portlet = undefined,
+    inlets: [NODE_PORTLET_COUNT]NodePortlet = undefined,
+    outlets: [NODE_PORTLET_COUNT]NodePortlet = undefined,
     ptr: *anyopaque,
     processFn: *const fn (*anyopaque) void,
-    portletFn: *const fn (*anyopaque, []const u8) Portlet,
+    portletFn: *const fn (*anyopaque, []const u8) NodePortlet,
 
-    const Portlet = Let(Signal);
+    const NodePortlet = Portlet(Signal);
 
     pub fn init(ptr: *anyopaque, T: type) Node {
         const concrete: *T = @ptrCast(@alignCast(ptr));
@@ -500,8 +486,8 @@ pub const Node = struct {
         node.num_inlets = p_ins.len;
         node.num_outlets = p_outs.len;
 
-        std.mem.copyForwards(Portlet, node.inlets[0..], p_ins[0..]);
-        std.mem.copyForwards(Portlet, node.outlets[0..], p_outs[0..]);
+        std.mem.copyForwards(NodePortlet, node.inlets[0..], p_ins[0..]);
+        std.mem.copyForwards(NodePortlet, node.outlets[0..], p_outs[0..]);
 
         return node;
     }
@@ -510,30 +496,29 @@ pub const Node = struct {
         n.processFn(n.ptr);
     }
 
-    pub fn ins(n: *Node) []Portlet {
+    pub fn ins(n: *Node) []NodePortlet {
         return n.inlets[0..n.num_inlets];
     }
 
-    pub fn in(n: Node, idx: usize) Portlet {
-        // assert idx no greater than inlet count
+    pub fn in(n: Node, idx: usize) NodePortlet {
+        // TODO: assert idx no greater than inlet count
         return n.inlets[idx];
     }
 
-    pub fn out(n: Node, idx: usize) Portlet {
-        // assert idx no greater than inlet count
+    pub fn out(n: Node, idx: usize) NodePortlet {
+        // TODO: assert idx no greater than inlet count
         return n.outlets[idx];
     }
 
-    pub fn outs(n: *Node) []Portlet {
+    pub fn outs(n: *Node) []NodePortlet {
         return n.outlets[0..n.num_outlets];
     }
 
-    pub fn port(n: Node, field_name: []const u8) Portlet {
+    pub fn port(n: Node, field_name: []const u8) NodePortlet {
         return n.portletFn(n.ptr, field_name);
     }
 };
 
-//TODO: distinguish between ptrs and node-derived signals
 pub const Signal = union(enum) {
     ptr: struct { val: *f32, src_node: *Node },
     handle: struct { idx: u16, ctx: *Context },
@@ -552,8 +537,8 @@ pub const Signal = union(enum) {
             .ptr => |ptr_s| {
                 ptr_s.val.* = v;
             },
-            .handle => {
-                std.debug.print("TODO", .{});
+            .handle => |handle| {
+                handle.ctx.setHandleVal(handle.idx, v);
             },
             .static => {
                 return;
@@ -588,7 +573,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
 
         const Self = @This();
         const FE = std.meta.FieldEnum(T);
-        pub const L = Let(S);
+        pub const L = Portlet(S);
 
         pub fn ins(ptr: *anyopaque) [T.ins.len]L {
             var t: *T = @ptrCast(@alignCast(ptr));
@@ -692,15 +677,11 @@ test "Ports" {
 
     const P = Ports(PortNode, []const u8);
 
-    // TODO: workshop
-    // var ins_buf: [8]P.L = undefined;
-    // try testing.expectEqualSlices(*const []const u8, &.{ &node.in_one, &node.in_two, &node.in_three }, P.ins(&node, &ins_buf));
-    //
+    // TODO: this could use more tests
+
+    // getPtr
     try testing.expectEqual(@TypeOf(P.getPtr(&node, .out_back)), *[]const u8);
+    try testing.expectEqual(&node.out_back, P.getPtr(&node, .out_back));
     try testing.expectEqual(@TypeOf(P.getPtr(&node, .steak_house)), *f32);
-
-    const in_two = P.get(&node, "in_two");
-    in_two.single.* = P.getOut(&node, 0).*;
-
-    try testing.expectEqual(P.getPtr(&node, .in_two).*, P.getPtr(&node, .out_back).*);
+    try testing.expectEqual(&node.steak_house, P.getPtr(&node, .steak_house));
 }

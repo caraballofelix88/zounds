@@ -51,7 +51,7 @@ pub fn main() !void {
         },
     };
 
-    var signal_ctx = try zounds.signals.Context.init(alloc);
+    var signal_ctx = zounds.signals.Context{};
 
     var new_osc_a = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
@@ -66,7 +66,7 @@ pub fn main() !void {
     var wobb = Wobble{
         .ctx = &signal_ctx,
         .id = "wob",
-        .frequency = .{ .static = 50.0 },
+        .frequency = .{ .static = 10.0 },
         .base_pitch = .{ .static = zounds.utils.pitchFromNote(63) },
     };
     var wobb_node = wobb.node();
@@ -103,7 +103,7 @@ pub fn main() !void {
 
     _ = try signal_ctx.registerNode(&new_osc_node_d);
 
-    var new_chord = try zounds.dsp.Sink.init(&signal_ctx);
+    var new_chord = try zounds.dsp.Sink.init(&signal_ctx, alloc);
     // TODO: cant release memory without ensuring the render thread is done first
     //defer new_chord.deinit();
 
@@ -111,11 +111,11 @@ pub fn main() !void {
 
     _ = try signal_ctx.registerNode(&new_chord_node);
 
-    // _ = try new_chord.inputs.append(new_osc_node_a.out(0).single.*);
-    // _ = try new_chord.inputs.append(new_osc_node_b.out(0).single.*);
-    // _ = try new_chord.inputs.append(new_osc_node_c.out(0).single.*);
-    // _ = try new_chord.inputs.append(new_osc_node_d.out(0).single.*);
-    //
+    _ = try new_chord.inputs.append(new_osc_node_a.out(0).single.*);
+    _ = try new_chord.inputs.append(new_osc_node_b.out(0).single.*);
+    _ = try new_chord.inputs.append(new_osc_node_c.out(0).single.*);
+    _ = try new_chord.inputs.append(new_osc_node_d.out(0).single.*);
+
     // file buffer
     const file_buf = try zounds.readers.wav.readWavFile(alloc, "res/PinkPanther30.wav");
 
@@ -124,8 +124,6 @@ pub fn main() !void {
     _ = try signal_ctx.registerNode(&buf_node);
 
     _ = try new_chord.inputs.append(buf_node.out(0).single.*);
-
-    _ = try signal_ctx.refreshNodeList();
 
     // TODO: audio context should derive its sample rate from available backend devices/formats
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
@@ -166,13 +164,9 @@ pub fn main() !void {
     _ = adsr;
 
     signal_ctx.sink = new_chord.out;
-    _ = try signal_ctx.refreshNodeList();
+    try signal_ctx.nodeDepSort();
 
-    std.debug.print("node list:\t", .{});
-    for (signal_ctx.node_list.?) |n| {
-        std.debug.print("{s}, ", .{n.id});
-    }
-    std.debug.print("\n", .{});
+    signal_ctx.printNodeList();
 
     var context_source = signal_ctx.source();
 
@@ -207,7 +201,7 @@ pub fn main() !void {
     // dah~
     trigger = true;
     std.debug.print("-dah~\n", .{});
-    std.time.sleep(std.time.ns_per_ms * 3000);
+    std.time.sleep(std.time.ns_per_ms * 10000);
 
     std.debug.print("ctx ticks:\t{}\n", .{signal_ctx.ticks});
 }

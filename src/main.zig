@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 pub const sources = @import("sources/main.zig");
-pub const wav = @import("readers/wav.zig");
 pub const utils = @import("utils.zig");
 pub const filters = @import("filters.zig");
 pub const envelope = @import("envelope.zig");
@@ -31,7 +30,7 @@ pub const Context = struct {
             // TODO: iterate through list of available backends if not specified
         };
 
-        const signal_ctx: signals.Context = try signals.Context.init(allocator);
+        const signal_ctx = signals.Context{};
 
         return .{ .alloc = allocator, .backend = backend_ctx, .signal = signal_ctx };
     }
@@ -108,9 +107,6 @@ pub const SampleFormat = enum {
     }
 };
 
-test "SampleFormat" {}
-
-// TODO: rename: "AudioFormat"? Just "Format"?
 pub const FormatData = struct {
     sample_format: SampleFormat,
     channels: []const ChannelPosition,
