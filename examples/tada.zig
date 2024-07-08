@@ -164,7 +164,7 @@ pub fn main() !void {
     _ = adsr;
 
     signal_ctx.sink = new_chord.out;
-    try signal_ctx.nodeDepSort();
+    try signal_ctx.buildProcessList();
 
     signal_ctx.printNodeList();
 

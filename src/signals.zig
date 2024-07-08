@@ -13,7 +13,7 @@ pub const Context = struct {
     // alloc: std.mem.Allocator,
     scratch: [SCRATCH_BYTES]f32 = std.mem.zeroes([SCRATCH_BYTES]f32),
     node_store: [MAX_NODE_COUNT]Node = undefined,
-    node_ptr_list: [MAX_NODE_COUNT]*Node = undefined,
+    node_process_list: [MAX_NODE_COUNT]*Node = undefined,
     sink: Signal = .{ .static = 0.0 },
     sample_rate: u32 = 44_100,
     inv_sample_rate: f32 = 1.0 / 44_100.0,
@@ -146,10 +146,17 @@ pub const Context = struct {
     }
 
     // TODO: check for cycles
-    pub fn nodeDepSort(ctx: *Context) !void {
+    //
+    // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
+    // https://en.wikipedia.org/wiki/Topological_sorting
+    //
+    // Pointer list is built in ctx.node_process_list
+    pub fn buildProcessList(ctx: *Context) !void {
         var queue = std.fifo.LinearFifo(*Node, .{ .Static = MAX_NODE_COUNT }).init();
         var indegrees: [MAX_NODE_COUNT]u8 = .{0} ** MAX_NODE_COUNT;
         var sorted_idx: u8 = 0;
+
+        std.debug.print("Rebuilding processing list...\n", .{});
 
         for (0..ctx.node_count) |idx| {
             var node = ctx.getHandleSource(idx);
@@ -177,46 +184,34 @@ pub const Context = struct {
         }
 
         while (queue.readItem()) |n| {
-            ctx.node_ptr_list[sorted_idx] = n;
+            ctx.node_process_list[sorted_idx] = n;
             sorted_idx += 1;
-            std.debug.print("pushing node {}, : {s}\n\n", .{ sorted_idx, n.id });
 
+            std.debug.print("Adding node {s} to {} place:\n", .{ n.id, sorted_idx });
+
+            // for each outlet, go through node store to find linked nodes
+            // TODO: iterating through the full node list each time we wanna find linked outputs for sure needlessly expensive,
+            // but its whatever for now. processing some kind of adjacency matrix upfront and using that maybe makes more sense
             for (n.outs()) |out| {
-
-                // go through full node list to find nodes receiving out
-                // TODO: this could be fixed up
                 for (0..ctx.node_count) |idx| {
                     var adj_node = ctx.getHandleSource(idx);
 
-                    for (adj_node.ins()) |in| {
-                        switch (in) {
-                            .single => |in_single| {
-                                if (out.single.* == .handle and in_single.* == .handle) {
-                                    if (out.single.*.handle.idx == in_single.*.handle.idx) {
-                                        std.debug.print("connection between {s} and {s}\n", .{ n.id, adj_node.id });
+                    for (adj_node.ins()) |in_port| {
+                        const in_signals: []const Signal = switch (in_port) {
+                            .single => |in_single| &.{in_single.*},
+                            .list => |in_list| in_list.items,
+                            else => unreachable,
+                        };
 
-                                        indegrees[idx] -= 1;
-                                        if (indegrees[idx] == 0) {
-                                            try queue.writeItem(adj_node);
-                                        }
-                                    }
-                                }
-                            },
-                            .list => |in_list| {
-                                for (in_list.items) |in_item| {
-                                    if (out.single.* == .handle and in_item == .handle) {
-                                        if (out.single.*.handle.idx == in_item.handle.idx) {
-                                            std.debug.print("connection between {s} and {s}\n", .{ n.id, adj_node.id });
+                        for (in_signals) |in_item| {
+                            if (std.meta.eql(out.single.*, in_item)) {
+                                std.debug.print("Connection: {s} -> {s}\n", .{ n.id, adj_node.id });
 
-                                            indegrees[idx] -= 1;
-                                            if (indegrees[idx] == 0) {
-                                                try queue.writeItem(adj_node);
-                                            }
-                                        }
-                                    }
+                                indegrees[idx] -= 1;
+                                if (indegrees[idx] == 0) {
+                                    try queue.writeItem(adj_node);
                                 }
-                            },
-                            else => {},
+                            }
                         }
                     }
                 }
@@ -243,14 +238,14 @@ pub const Context = struct {
 
         concrete_b.out = try ctx.registerNode(&node_b);
 
-        try ctx.nodeDepSort();
+        try ctx.buildProcessList();
         ctx.printNodeList();
     }
 
     pub fn printNodeList(ctx: *Context) void {
         std.debug.print("node list:\t", .{});
         for (0..ctx.node_count) |idx| {
-            const n = ctx.node_ptr_list[idx];
+            const n = ctx.node_process_list[idx];
             std.debug.print("{s}, ", .{n.id});
         }
         std.debug.print("\n", .{});
@@ -259,7 +254,7 @@ pub const Context = struct {
     pub fn process(ctx: *Context, should_print: bool) void {
         // for node in context graph, compute new values
         for (0..ctx.node_count) |idx| {
-            var node = ctx.node_ptr_list[idx];
+            var node = ctx.node_process_list[idx];
             node.process();
             if (should_print == true) {
                 const out = node.out(0);
@@ -342,7 +337,7 @@ pub const Context = struct {
         ctx.node_count += 1;
 
         // re-sort node processing list
-        try ctx.nodeDepSort();
+        try ctx.buildProcessList();
 
         return store_signal;
     }
