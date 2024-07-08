@@ -156,7 +156,7 @@ pub const Context = struct {
         var indegrees: [MAX_NODE_COUNT]u8 = .{0} ** MAX_NODE_COUNT;
         var sorted_idx: u8 = 0;
 
-        std.debug.print("Rebuilding processing list...\n", .{});
+        // std.debug.print("Rebuilding processing list...\n", .{});
 
         for (0..ctx.node_count) |idx| {
             var node = ctx.getHandleSource(idx);
@@ -187,7 +187,7 @@ pub const Context = struct {
             ctx.node_process_list[sorted_idx] = n;
             sorted_idx += 1;
 
-            std.debug.print("Adding node {s} to {} place:\n", .{ n.id, sorted_idx });
+            // std.debug.print("Adding node {s} to {} place:\n", .{ n.id, sorted_idx });
 
             // for each outlet, go through node store to find linked nodes
             // TODO: iterating through the full node list each time we wanna find linked outputs for sure needlessly expensive,
@@ -205,7 +205,7 @@ pub const Context = struct {
 
                         for (in_signals) |in_item| {
                             if (std.meta.eql(out.single.*, in_item)) {
-                                std.debug.print("Connection: {s} -> {s}\n", .{ n.id, adj_node.id });
+                                // std.debug.print("Connection: {s} -> {s}\n", .{ n.id, adj_node.id });
 
                                 indegrees[idx] -= 1;
                                 if (indegrees[idx] == 0) {
@@ -224,22 +224,7 @@ pub const Context = struct {
     }
 
     test "nodeDepSort" {
-        std.debug.print("hello\n", .{});
-        var ctx = Context{};
-
-        var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        var node_a = concrete_a.node();
-
-        _ = try ctx.registerNode(&node_a);
-
-        var concrete_b = Context.ConcreteA{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
-        std.debug.print("node a out:\t{any}\n", .{node_a.out(0).single.*});
-        var node_b = concrete_b.node();
-
-        concrete_b.out = try ctx.registerNode(&node_b);
-
-        try ctx.buildProcessList();
-        ctx.printNodeList();
+        // TODO: TK
     }
 
     pub fn printNodeList(ctx: *Context) void {
@@ -324,8 +309,7 @@ pub const Context = struct {
     }
 
     // TODO: unregistering, i guess
-    // TODO: feels jank, maybe, keep thinking about this
-    // Reserves space for node output in context scratch
+    // Reserves space for node and processing output in context
     pub fn registerNode(ctx: *Context, node: *Node) !Signal {
         // TODO: assert type has process function with compatible signature
 
@@ -515,13 +499,13 @@ pub const Node = struct {
 };
 
 pub const Signal = union(enum) {
-    ptr: struct { val: *f32, src_node: *Node },
+    ptr: *f32,
     handle: struct { idx: u16, ctx: *Context },
     static: f32,
 
     pub fn get(s: Signal) f32 {
         return switch (s) {
-            .ptr => |ptr_s| ptr_s.val.*,
+            .ptr => |ptr| ptr.*,
             .handle => |handle| handle.ctx.getHandleVal(handle.idx),
             .static => |val| val,
         };
@@ -529,8 +513,8 @@ pub const Signal = union(enum) {
 
     pub fn set(s: Signal, v: f32) void {
         switch (s) {
-            .ptr => |ptr_s| {
-                ptr_s.val.* = v;
+            .ptr => |ptr| {
+                ptr.* = v;
             },
             .handle => |handle| {
                 handle.ctx.setHandleVal(handle.idx, v);
@@ -543,7 +527,7 @@ pub const Signal = union(enum) {
 
     pub fn source(s: Signal) ?*Node {
         return switch (s) {
-            .ptr => |ptr_s| ptr_s.src_node,
+            .ptr => null,
             .handle => |handle| handle.ctx.getHandleSource(handle.idx),
             .static => null,
         };

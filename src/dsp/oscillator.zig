@@ -7,7 +7,7 @@ pub const Oscillator = struct {
     id: []const u8 = "oscillator",
     wavetable: []const f32 = &wavegen.sine_wave,
     pitch: signals.Signal = .{ .static = 440.0 },
-    amp: signals.Signal = .{ .static = 0.5 },
+    amp: signals.Signal = .{ .static = 1.0 },
     out: signals.Signal = .{ .static = 0.0 },
     phase: f32 = 0.0,
 

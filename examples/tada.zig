@@ -45,125 +45,78 @@ pub fn main() !void {
         .frames_per_packet = 1,
         .desired_format = .{
             .sample_format = .f32,
-            .sample_rate = 44_100,
+            .sample_rate = 22_050,
             .channels = zounds.ChannelPosition.fromChannelCount(2),
             .is_interleaved = true,
         },
     };
 
-    var signal_ctx = zounds.signals.Context{};
+    var signal_ctx = zounds.signals.Context{
+        .sample_rate = 22_050,
+        .inv_sample_rate = 1.0 / 22_050.0,
+    };
 
-    var new_osc_a = zounds.dsp.Oscillator{
+    var osc_c = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
-        .id = "osc_a",
+        .id = "Osc:C",
         .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
-        .amp = .{ .static = 1.0 },
     };
-    var new_osc_node_a = new_osc_a.node();
+    var c_node = osc_c.node();
 
-    _ = try signal_ctx.registerNode(&new_osc_node_a);
+    _ = try signal_ctx.registerNode(&c_node);
 
-    var wobb = Wobble{
+    var wobbly_e = Wobble{
         .ctx = &signal_ctx,
-        .id = "wob",
-        .frequency = .{ .static = 10.0 },
-        .base_pitch = .{ .static = zounds.utils.pitchFromNote(63) },
+        .id = "Wobble",
+        .frequency = .{ .static = 3.0 },
+        .base_pitch = .{ .static = zounds.utils.pitchFromNote(65) },
+        .amp = .{ .static = 4.0 },
     };
-    var wobb_node = wobb.node();
+    var wobb_node = wobbly_e.node();
 
     _ = try signal_ctx.registerNode(&wobb_node);
 
-    var new_osc_b = zounds.dsp.Oscillator{
+    var osc_e = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
-        .id = "osc_b",
-        .pitch = wobb.out,
-        .amp = .{ .static = 1.0 },
+        .id = "Osc:E",
+        .pitch = wobbly_e.out,
     };
-    var new_osc_node_b = new_osc_b.node();
+    var e_node = osc_e.node();
 
-    _ = try signal_ctx.registerNode(&new_osc_node_b);
+    _ = try signal_ctx.registerNode(&e_node);
 
-    var new_osc_c = zounds.dsp.Oscillator{
+    var osc_g = zounds.dsp.Oscillator{
         .ctx = &signal_ctx,
-        .id = "osc_c",
-        .pitch = .{ .static = zounds.utils.pitchFromNote(67) },
-        .amp = .{ .static = 1.0 },
-    };
-    var new_osc_node_c = new_osc_c.node();
-
-    _ = try signal_ctx.registerNode(&new_osc_node_c);
-
-    var new_osc_d = zounds.dsp.Oscillator{
-        .ctx = &signal_ctx,
-        .id = "osc_d",
+        .id = "Osc:G",
         .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
-        .amp = .{ .static = 1.0 },
     };
-    var new_osc_node_d = new_osc_d.node();
+    var g_node = osc_g.node();
 
-    _ = try signal_ctx.registerNode(&new_osc_node_d);
+    _ = try signal_ctx.registerNode(&g_node);
 
-    var new_chord = try zounds.dsp.Sink.init(&signal_ctx, alloc);
+    var chord = zounds.dsp.Sink.init(&signal_ctx, alloc);
     // TODO: cant release memory without ensuring the render thread is done first
     //defer new_chord.deinit();
 
-    var new_chord_node = new_chord.node();
-
+    var new_chord_node = chord.node();
     _ = try signal_ctx.registerNode(&new_chord_node);
 
-    _ = try new_chord.inputs.append(new_osc_node_a.out(0).single.*);
-    _ = try new_chord.inputs.append(new_osc_node_b.out(0).single.*);
-    _ = try new_chord.inputs.append(new_osc_node_c.out(0).single.*);
-    _ = try new_chord.inputs.append(new_osc_node_d.out(0).single.*);
+    _ = try chord.inputs.append(c_node.out(0).single.*);
+    _ = try chord.inputs.append(e_node.out(0).single.*);
+    _ = try chord.inputs.append(g_node.out(0).single.*);
 
-    // file buffer
-    const file_buf = try zounds.readers.wav.readWavFile(alloc, "res/PinkPanther30.wav");
-
-    var concrete_buf = zounds.dsp.BufferPlayback{ .ctx = &signal_ctx, .buf = file_buf };
-    var buf_node = concrete_buf.node();
-    _ = try signal_ctx.registerNode(&buf_node);
-
-    _ = try new_chord.inputs.append(buf_node.out(0).single.*);
-
-    // TODO: audio context should derive its sample rate from available backend devices/formats
+    // TODO: audio context should derive its sample rate from available backend devices/formats, not the raw desired config
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 
-    var trigger: bool = false;
+    var trigger: f32 = 0.0;
+    var adsr = zounds.dsp.ADSR{ .ctx = &signal_ctx, .trigger = .{ .ptr = &trigger } };
+    var adsr_node = adsr.node();
 
-    // TODO: ADSR utility function for quickly generating 4-tuple ramp list
-    const adsr: [4]zounds.envelope.Ramp = .{
-        .{ // attack
-            .from = 0.0,
-            .to = 1.0,
-            .ramp_type = .linear,
-            .sample_rate = 44_100,
-            .duration = .{ .seconds = 0.05 },
-        },
-        .{ // decay
-            .from = 1.0,
-            .to = 0.7,
-            .ramp_type = .linear,
-            .sample_rate = 44_100,
-            .duration = .{ .seconds = 0.5 },
-        },
-        .{ // sustain
-            .from = 0.7,
-            .to = 0.5,
-            .ramp_type = .linear,
-            .sample_rate = 44_100,
-            .duration = .{ .seconds = 0.8 },
-        },
-        .{ // release
-            .from = 0.5,
-            .to = 0.0,
-            .ramp_type = .linear,
-            .sample_rate = 44_100,
-            .duration = .{ .seconds = 0.3 },
-        },
-    };
-    _ = adsr;
+    _ = try signal_ctx.registerNode(&adsr_node);
 
-    signal_ctx.sink = new_chord.out;
+    chord.amp = adsr.out;
+
+    signal_ctx.sink = chord.out;
     try signal_ctx.buildProcessList();
 
     signal_ctx.printNodeList();
@@ -171,7 +124,7 @@ pub fn main() !void {
     var context_source = signal_ctx.source();
 
     const device: zounds.Device = .{
-        .sample_rate = 44_100,
+        .sample_rate = 22_050,
         .channels = zounds.ChannelPosition.fromChannelCount(2),
         .id = "fake_device",
         .name = "Fake Device",
@@ -188,20 +141,20 @@ pub fn main() !void {
 
     player.play();
 
-    std.time.sleep(std.time.ns_per_ms * 1000);
+    std.time.sleep(std.time.ns_per_ms * 500);
 
     // ta
-    trigger = true;
+    trigger = 1.0;
     std.debug.print("ta", .{});
     std.time.sleep(std.time.ns_per_ms * 180);
 
-    trigger = false;
+    trigger = 0.0;
     std.time.sleep(std.time.ns_per_ms * 50);
 
     // dah~
-    trigger = true;
+    trigger = 1.0;
     std.debug.print("-dah~\n", .{});
-    std.time.sleep(std.time.ns_per_ms * 10000);
+    std.time.sleep(std.time.ns_per_ms * 3000);
 
     std.debug.print("ctx ticks:\t{}\n", .{signal_ctx.ticks});
 }

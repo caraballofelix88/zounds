@@ -6,13 +6,13 @@ pub const Sink = struct {
     alloc: std.mem.Allocator,
     id: []const u8 = "Sink",
     inputs: std.ArrayList(signals.Signal),
+    amp: signals.Signal = .{ .static = 1.0 },
     out: signals.Signal = .{ .static = 0.0 },
 
-    pub const ins = [_]std.meta.FieldEnum(Sink){.inputs};
+    pub const ins = [_]std.meta.FieldEnum(Sink){ .inputs, .amp };
     pub const outs = [_]std.meta.FieldEnum(Sink){.out};
 
-    // use ctx.alloc for now
-    pub fn init(ctx: *signals.Context, alloc: std.mem.Allocator) !Sink {
+    pub fn init(ctx: *signals.Context, alloc: std.mem.Allocator) Sink {
         const inputs = std.ArrayList(signals.Signal).init(alloc);
         return .{
             .ctx = ctx,
@@ -37,6 +37,7 @@ pub const Sink = struct {
         }
 
         result /= @floatFromInt(@max(input_count, 1));
+        result *= sink.amp.get();
         sink.out.set(result);
     }
 

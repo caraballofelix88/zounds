@@ -42,7 +42,6 @@ const Duration = union(DurationTags) {
 
 test "Duration" {
     const sample_rate: u32 = 44_100;
-
     const secs: Duration = .{ .seconds = 1.0 };
     try testing.expectEqual(secs.in_millis(sample_rate), 1000);
     try testing.expectEqual(secs.in_samples(sample_rate), 44_100);
@@ -66,7 +65,7 @@ pub const Ramp = struct {
     sample_rate: u32,
     ramp_type: RampType,
 
-    fn at(r: Ramp, index: usize) f32 {
+    pub fn at(r: Ramp, index: usize) f32 {
         if (index >= r.duration_samples()) {
             return r.to;
         }
@@ -95,7 +94,7 @@ pub const Ramp = struct {
         };
     }
 
-    fn duration_samples(r: Ramp) u32 {
+    pub fn duration_samples(r: Ramp) u32 {
         return r.duration.in_samples(r.sample_rate);
     }
 };
