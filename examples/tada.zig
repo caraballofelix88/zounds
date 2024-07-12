@@ -96,7 +96,7 @@ pub fn main() !void {
 
     var chord = zounds.dsp.Sink.init(&signal_ctx, alloc);
     // TODO: cant release memory without ensuring the render thread is done first
-    //defer new_chord.deinit();
+    defer chord.deinit();
 
     var new_chord_node = chord.node();
     _ = try signal_ctx.registerNode(&new_chord_node);
@@ -109,7 +109,7 @@ pub fn main() !void {
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 
     var trigger: f32 = 0.0;
-    var adsr = zounds.dsp.ADSR{ .ctx = &signal_ctx, .trigger = .{ .ptr = &trigger } };
+    var adsr = zounds.dsp.ADSR(.{}){ .ctx = &signal_ctx, .trigger = .{ .ptr = &trigger } };
     var adsr_node = adsr.node();
 
     _ = try signal_ctx.registerNode(&adsr_node);
