@@ -7,7 +7,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mod = b.addModule("zounds", .{ .root_source_file = .{ .path = "src/main.zig" } });
+    const mod = b.addModule("zounds", .{ .root_source_file = .{
+        .src_path = .{ .owner = b, .sub_path = "src/main.zig" },
+    } });
 
     const example_name = b.option(
         []const u8,
@@ -20,7 +22,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = example_name,
-        .root_source_file = .{ .path = exe_path },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = exe_path } },
         .target = target,
         .optimize = optimize,
     });
@@ -40,12 +42,12 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const main_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/tests.zig" },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/tests/zig" } },
         .target = target,
         .optimize = optimize,
     });
 
-    main_tests.root_module.addIncludePath(.{ .path = "src/main.zig" });
+    main_tests.root_module.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } });
 
     linkPlatformFrameworks(target, main_tests);
 
@@ -59,7 +61,7 @@ pub fn build(b: *std.Build) void {
 
     const check_exe = b.addExecutable(.{
         .name = example_name,
-        .root_source_file = .{ .path = exe_path },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = exe_path } },
         .target = target,
         .optimize = optimize,
     });
