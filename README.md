@@ -4,10 +4,16 @@ What does this thing do?
 - Plays sounds
   - how?
     - backend
-      - hooks up to MacOS audio libs (but could plug in to other stuff as well)
+      - hooks up to MacOS audio libs (but could plug in to other stuff as well, eventually)
+      - abstractions:
+        - Context
+        - MIDI
+        - Player
     - frontend
-      - modules that take in signals and output signals
+      - modules that take signals and output signals
       - these processing nodes can be strung together to compose all kinds of crazy noises
+      - signals serve as providers of input values, as well as edges to graph nodes 
+        - when plugged into the audio graph context, nodes 
       
 - Reads wav files
 - Processes MIDI (sort of)
@@ -18,6 +24,7 @@ What does this thing do?
 Goals:
 - Something that could run on embedded hardware  
   - minimal dynamic memory allocation
+  - taking as much advantage as possible of static analysis (what does this mean)
   - frontload processing to comptime where possible
     - generating waveforms
     - building node vtables
@@ -44,10 +51,22 @@ TODO:
   - [ ] Shore up signal context, handle edge cases (like reaching a node cap)
   - [ ] Handle node deregistration
   - [ ] Signals currently stuck as f32s, but how to extend to other types?
+    - Currently stuck with f32s for a couple of reasons
+      - Heterogeneous types in Port abstraction kind of weird
+      - Structure to store heterogeneous types not obvious
+        - This article talks through dense allocation of tagged union values by way of an "Array of Variant Arrays" -- https://alic.dev/blog/dense-enums
+          - break up union tags by their value type size/alignment
+          - set up separate arrays for each bucket size (eg. f32, u32 both fit in the 4-wide array, so they can cohabitate)
+          - Would need to add type tags to Signals (a big ergo win)
+  - [ ] how to free up scratch space if/when nodes are removed from the graph?
+  - [ ] Remove dynamic port idea, needs more time in the oven and is getting in the way of other stuff
   - [ ] Support multi-channel output
     - How to mux/demux across different channel counts?
   - [ ] Configurable Context, allow for comptime definition of node store size, etc.
   - [ ] Block-based processing, to allow for more sophisticated effects 
+  - [ ] Signal graph processing should pipe into buffer for consumption by backend, instead of being fed straight in 
+  - [ ] Producing signals should be on a separate thread from consumption
+
 
 - Synth
   - [ ] Polyphonic synth node 
@@ -56,7 +75,23 @@ TODO:
 
 - Ergonomics
   - [ ] Tidy up node registration, how to eliminate those additional steps?
+  - [ ] Searching for nodes in graph by id, or other filters/rules?
   - [ ] How to refresh node processing list on assigning new signals?
+  - Idea for ^: signal context keeps registry of available abstractions
+    - ctx.connect(from: OutSignal, to: InSignal)
+    - ctx.disconnect() // sets to static 0 signal
+    - ctx.registerNode() // already have this!
+    - ctx.deregisterNode() 
+      - looks at all the node's outlets and zeroes out any nodes using them?
+        - Actually, if we use generational updates to track outdated nodes, we can skip this:
+          - on signal.get(), check generation id on handle signal. If older than current handle, dump it.
+
+- Inspo/Reading
+  - PureData
+  - http://www.rossbencina.com/code/real-time-audio-programming-101-time-waits-for-nothing
+  - 
+
+
 
 - Documentation
   - [ ] examples for features not yet showcased:

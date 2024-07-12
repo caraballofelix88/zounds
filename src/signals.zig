@@ -8,6 +8,12 @@ const dsp = @import("dsp/dsp.zig");
 const MAX_NODE_COUNT = 64;
 const SCRATCH_BYTES = 1024;
 const NODE_PORTLET_COUNT = 8;
+const CHANNEL_COUNT = 1;
+
+// TODO: Thought: better to enforce memory limits in static arrays?
+// Would it instead make more sense to reserve a huge chunk of memory upfront and allocate to it with a FixedBufferAllocator?
+// Feels like the same thing with more work
+// Allows for more flexible allocation in the future
 
 pub const Context = struct {
     // alloc: std.mem.Allocator,
@@ -22,7 +28,7 @@ pub const Context = struct {
 
     // TODO: just one channel's worth of output
     // Context should be aware of output format (channel count)
-    tmp: [4]u8 = undefined,
+    tmp: [4 * CHANNEL_COUNT]u8 = undefined,
 
     // Temp compatibility stuff
     pub fn nextFn(ptr: *anyopaque) ?[]u8 {
