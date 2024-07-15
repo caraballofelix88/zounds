@@ -136,7 +136,8 @@ pub fn main() !void {
         .format = config.desired_format,
     };
 
-    const player = try player_ctx.createPlayer(device, &writeFn, options);
+    var player = try player_ctx.createPlayer(device, &writeFn, options);
+    defer player.deinit();
     _ = try player.setVolume(-20.0);
 
     player.play();
@@ -159,7 +160,24 @@ pub fn main() !void {
     std.debug.print("ctx ticks:\t{}\n", .{signal_ctx.ticks});
 }
 
-pub fn writeFn(ref: *anyopaque, buf: []u8) void {
-    _ = ref;
-    _ = buf;
+pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {
+    // TODO: format should be passed in w ref?
+    const sample_size: usize = 4;
+    _ = sample_size; // autofix
+    const num_channels: usize = 2;
+
+    var source: *zounds.sources.AudioSource = @ptrCast(@alignCast(write_ref));
+    const sample_buf: []align(1) f32 = std.mem.bytesAsSlice(f32, buf);
+
+    for (0..num_frames) |frame_idx| {
+        const next = source.next().?;
+        const next_frame: []align(1) f32 = std.mem.bytesAsSlice(f32, next);
+
+        // For now, copy the single sample into every channels
+        const curr_frame = num_channels * frame_idx;
+        for (0..num_channels) |ch| {
+            const ch_idx = curr_frame + ch;
+            @memcpy(sample_buf[ch_idx .. ch_idx + 1], next_frame[0..1]);
+        }
+    }
 }

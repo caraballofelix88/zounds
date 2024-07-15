@@ -79,7 +79,7 @@ pub const Player = struct {
 
     pub inline fn deinit(p: *Player) void {
         return switch (p.backend) {
-            inline else => |b| try b.deinit(),
+            inline else => |b| b.deinit(),
         };
     }
 };
@@ -177,4 +177,4 @@ pub const StreamOptions = struct {
     write_ref: *anyopaque,
 };
 
-pub const WriteFn = *const fn (player_opaque: *anyopaque, output: []u8) void;
+pub const WriteFn = *const fn (player_opaque: *anyopaque, output: []u8, num_frames: usize) void;

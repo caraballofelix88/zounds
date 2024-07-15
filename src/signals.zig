@@ -34,7 +34,7 @@ pub const Context = struct {
     pub fn nextFn(ptr: *anyopaque) ?[]u8 {
         var ctx: *Context = @ptrCast(@alignCast(ptr));
 
-        const val = ctx.next();
+        const val = std.math.clamp(ctx.next(), -1.0, 1.0);
         ctx.tmp = std.mem.toBytes(val);
 
         return &ctx.tmp;

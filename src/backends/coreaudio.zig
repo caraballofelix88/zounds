@@ -23,6 +23,7 @@ pub const Context = struct {
     alloc: std.mem.Allocator,
     audioUnit: c.AudioUnit,
     devices: std.ArrayList(main.Device),
+    format: main.FormatData,
 
     pub fn init(allocator: std.mem.Allocator, config: main.ContextConfig) !backends.Context {
         var acd = c.AudioComponentDescription{
@@ -69,6 +70,8 @@ pub const Context = struct {
             .alloc = allocator,
             .audioUnit = audioUnit,
             .devices = undefined,
+            // TODO: should use resolved device format instead of desired format
+            .format = config.desired_format,
         };
 
         return .{ .coreaudio = ctx };
@@ -89,30 +92,10 @@ pub const Context = struct {
         _ = bus_number;
 
         const player: *Player = @ptrCast(@alignCast(ref_ptr));
-
-        // TODO: move render stuff into writeFn
         const writeFn: main.WriteFn = player.writeFn;
-        _ = writeFn;
+        const buf: [*]u8 = @ptrCast(@alignCast(buffer_list.?.*.mBuffers[0].mData));
 
-        var source: *sources.AudioSource = @ptrCast(@alignCast(player.write_ref));
-
-        // TODO: this can be format-independent if we count samples over byte by byte???
-        // byte-per-byte should resolve channel playback as well as format size
-        var buf: [*]f32 = @ptrCast(@alignCast(buffer_list.?.*.mBuffers[0].mData));
-
-        const sample_size = 4; // TODO: pull in from player context
-        const num_samples = num_frames * 2;
-
-        var frame: u32 = 0;
-
-        while (frame < num_samples) : (frame += 2) { // TODO: manually interleave channels for stereo for now
-
-            const nextSample: f32 = std.mem.bytesAsValue(f32, source.next().?[0..sample_size]).*;
-
-            buf[frame] = std.math.clamp(nextSample, -1.0, 1.0);
-            buf[frame + 1] = std.math.clamp(nextSample, -1.0, 1.0);
-            // buf[frame + 1] = fromIterR; //std.math.shr(f64, fromIter, 32) | fromIter;
-        }
+        writeFn(player.write_ref, buf[0 .. num_frames * player.ctx.format.frameSize()], num_frames);
 
         return c.noErr;
     }
@@ -278,7 +261,7 @@ fn midiPacketReader(packets: [*c]const c.MIDIPacketList, read_proc_ref: ?*anyopa
     _ = source_connect_ref;
 
     const cb_struct: *Midi.ClientCallbackStruct = @ptrCast(@alignCast(read_proc_ref));
-    const cb: *fn (*const midi.Message, *anyopaque) void = @ptrCast(@constCast(@alignCast(cb_struct.cb)));
+    const cb: *const fn (*const midi.Message, *anyopaque) void = @ptrCast(@alignCast(cb_struct.cb));
 
     // NOTE: MIDIPacket within packet list needs to be pulled by memory address, not by array reference
     const packet_bytes = std.mem.asBytes(packets);
