@@ -2,7 +2,7 @@ const std = @import("std");
 const signals = @import("../signals.zig");
 
 pub const Sink = struct {
-    ctx: *signals.Context,
+    ctx: signals.IContext,
     alloc: std.mem.Allocator,
     id: []const u8 = "Sink",
     inputs: std.ArrayList(signals.Signal),
@@ -12,7 +12,7 @@ pub const Sink = struct {
     pub const ins = [_]std.meta.FieldEnum(Sink){ .inputs, .amp };
     pub const outs = [_]std.meta.FieldEnum(Sink){.out};
 
-    pub fn init(ctx: *signals.Context, alloc: std.mem.Allocator) Sink {
+    pub fn init(ctx: signals.IContext, alloc: std.mem.Allocator) Sink {
         const inputs = std.ArrayList(signals.Signal).init(alloc);
         return .{
             .ctx = ctx,

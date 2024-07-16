@@ -18,7 +18,7 @@ pub const Backend = backends.Backend;
 pub const Context = struct {
     alloc: std.mem.Allocator,
     backend: backends.Context,
-    signal: signals.Context,
+    //signal: signals.Context,
 
     pub fn init(comptime backend: ?Backend, allocator: std.mem.Allocator, config: ContextConfig) !Context {
         const backend_ctx: backends.Context = blk: {
@@ -30,9 +30,13 @@ pub const Context = struct {
             // TODO: iterate through list of available backends if not specified
         };
 
-        const signal_ctx = signals.Context{};
+        // const signal_ctx = signals.Context{};
 
-        return .{ .alloc = allocator, .backend = backend_ctx, .signal = signal_ctx };
+        return .{
+            .alloc = allocator,
+            .backend = backend_ctx,
+            // .signal = signal_ctx,
+        };
     }
 
     pub inline fn deinit(ctx: *Context) void {
@@ -116,6 +120,10 @@ pub const FormatData = struct {
     pub fn frameSize(f: FormatData) usize {
         return f.sample_format.size() * f.channels.len;
     }
+
+    pub fn invSampleRate(f: FormatData) f32 {
+        return 1.0 / @as(f32, @floatFromInt(f.sample_rate));
+    }
 };
 
 pub const AudioBuffer = struct {
@@ -144,8 +152,8 @@ pub const ChannelPosition = enum {
     left,
     right,
 
-    const mono: [1]ChannelPosition = .{.left};
-    const stereo: [2]ChannelPosition = .{ .left, .right };
+    pub const mono: [1]ChannelPosition = .{.left};
+    pub const stereo: [2]ChannelPosition = .{ .left, .right };
 
     pub fn fromChannelCount(count: usize) []const ChannelPosition {
         return switch (count) {

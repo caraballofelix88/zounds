@@ -44,7 +44,7 @@ pub fn ADSR(opts: ADSROptions) type {
 
         const Self = @This();
 
-        ctx: *signals.Context,
+        ctx: signals.IContext,
         id: []const u8 = "adsr",
         state: Self.State = .off,
         trigger: signals.Signal = .{ .static = 0.0 },
@@ -65,14 +65,14 @@ pub fn ADSR(opts: ADSROptions) type {
             // update state
             if (adsr.trigger.get() > adsr.prev_trigger) {
                 adsr.state = .attack;
-                adsr.attack_ts = adsr.ctx.ticks;
+                adsr.attack_ts = adsr.ctx.ticks();
                 adsr.ramps[0].from = adsr.prev_val;
                 adsr.hold_duration = 0;
             }
 
             if (adsr.trigger.get() < adsr.prev_trigger) {
                 adsr.state = .release;
-                adsr.release_ts = adsr.ctx.ticks;
+                adsr.release_ts = adsr.ctx.ticks();
                 adsr.ramps[3].from = adsr.prev_val;
                 adsr.hold_duration = 0;
             }

@@ -6,7 +6,7 @@ const Node = zounds.signals.Node;
 
 // simple LFO
 const Wobble = struct {
-    ctx: *zounds.signals.Context,
+    ctx: zounds.signals.IContext,
     id: []const u8 = "wobb",
     base_pitch: Signal = .{ .static = 440.0 },
     frequency: Signal = .{ .static = 10.0 },
@@ -45,28 +45,26 @@ pub fn main() !void {
         .frames_per_packet = 1,
         .desired_format = .{
             .sample_format = .f32,
-            .sample_rate = 22_050,
+            .sample_rate = 44_100,
             .channels = zounds.ChannelPosition.fromChannelCount(2),
             .is_interleaved = true,
         },
     };
 
-    var signal_ctx = zounds.signals.Context{
-        .sample_rate = 22_050,
-        .inv_sample_rate = 1.0 / 22_050.0,
-    };
+    var signals = zounds.signals.Context(.{ .channel_count = 2 }){ .format = config.desired_format };
+    var signal_ctx = signals.context();
 
     var osc_c = zounds.dsp.Oscillator{
-        .ctx = &signal_ctx,
+        .ctx = signal_ctx,
         .id = "Osc:C",
         .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
     };
     var c_node = osc_c.node();
 
-    _ = try signal_ctx.registerNode(&c_node);
+    _ = try signal_ctx.register(&c_node);
 
     var wobbly_e = Wobble{
-        .ctx = &signal_ctx,
+        .ctx = signal_ctx,
         .id = "Wobble",
         .frequency = .{ .static = 3.0 },
         .base_pitch = .{ .static = zounds.utils.pitchFromNote(65) },
@@ -74,32 +72,32 @@ pub fn main() !void {
     };
     var wobb_node = wobbly_e.node();
 
-    _ = try signal_ctx.registerNode(&wobb_node);
+    _ = try signal_ctx.register(&wobb_node);
 
     var osc_e = zounds.dsp.Oscillator{
-        .ctx = &signal_ctx,
+        .ctx = signal_ctx,
         .id = "Osc:E",
         .pitch = wobbly_e.out,
     };
     var e_node = osc_e.node();
 
-    _ = try signal_ctx.registerNode(&e_node);
+    _ = try signal_ctx.register(&e_node);
 
     var osc_g = zounds.dsp.Oscillator{
-        .ctx = &signal_ctx,
+        .ctx = signal_ctx,
         .id = "Osc:G",
         .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
     };
     var g_node = osc_g.node();
 
-    _ = try signal_ctx.registerNode(&g_node);
+    _ = try signal_ctx.register(&g_node);
 
-    var chord = zounds.dsp.Sink.init(&signal_ctx, alloc);
+    var chord = zounds.dsp.Sink.init(signal_ctx, alloc);
     // TODO: cant release memory without ensuring the render thread is done first
     defer chord.deinit();
 
     var new_chord_node = chord.node();
-    _ = try signal_ctx.registerNode(&new_chord_node);
+    _ = try signal_ctx.register(&new_chord_node);
 
     _ = try chord.inputs.append(c_node.out(0).single.*);
     _ = try chord.inputs.append(e_node.out(0).single.*);
@@ -109,22 +107,21 @@ pub fn main() !void {
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 
     var trigger: f32 = 0.0;
-    var adsr = zounds.dsp.ADSR(.{}){ .ctx = &signal_ctx, .trigger = .{ .ptr = &trigger } };
+    var adsr = zounds.dsp.ADSR(.{}){ .ctx = signal_ctx, .trigger = .{ .ptr = &trigger } };
     var adsr_node = adsr.node();
 
-    _ = try signal_ctx.registerNode(&adsr_node);
+    _ = try signal_ctx.register(&adsr_node);
 
     chord.amp = adsr.out;
 
-    signal_ctx.sink = chord.out;
-    try signal_ctx.buildProcessList();
+    try signal_ctx.connect(&signals.root_signal, chord.out);
 
-    signal_ctx.printNodeList();
+    signals.printNodeList();
 
     var context_source = signal_ctx.source();
 
     const device: zounds.Device = .{
-        .sample_rate = 22_050,
+        .sample_rate = 44_100,
         .channels = zounds.ChannelPosition.fromChannelCount(2),
         .id = "fake_device",
         .name = "Fake Device",
@@ -157,11 +154,11 @@ pub fn main() !void {
     std.debug.print("-dah~\n", .{});
     std.time.sleep(std.time.ns_per_ms * 3000);
 
-    std.debug.print("ctx ticks:\t{}\n", .{signal_ctx.ticks});
+    std.debug.print("ctx ticks:\t{}\n", .{signal_ctx.ticks()});
 }
 
 pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {
-    // TODO: format should be passed in w ref?
+    // TODO: format, frame size should be passed in w ref?
     const sample_size: usize = 4;
     _ = sample_size; // autofix
     const num_channels: usize = 2;
@@ -173,11 +170,8 @@ pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {
         const next = source.next().?;
         const next_frame: []align(1) f32 = std.mem.bytesAsSlice(f32, next);
 
-        // For now, copy the single sample into every channels
         const curr_frame = num_channels * frame_idx;
-        for (0..num_channels) |ch| {
-            const ch_idx = curr_frame + ch;
-            @memcpy(sample_buf[ch_idx .. ch_idx + 1], next_frame[0..1]);
-        }
+
+        @memcpy(sample_buf[curr_frame .. curr_frame + num_channels], next_frame);
     }
 }

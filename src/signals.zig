@@ -7,418 +7,298 @@ const dsp = @import("dsp/dsp.zig");
 
 const MAX_NODE_COUNT = 64;
 const SCRATCH_BYTES = 1024;
-const NODE_PORTLET_COUNT = 8;
-const CHANNEL_COUNT = 1;
+const MAX_PORT_COUNT = 8;
+const CHANNEL_COUNT = 2;
 
-// TODO: Thought: better to enforce memory limits in static arrays?
-// Would it instead make more sense to reserve a huge chunk of memory upfront and allocate to it with a FixedBufferAllocator?
-// Feels like the same thing with more work
-// Allows for more flexible allocation in the future
+pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList };
+pub const IContext = struct {
+    ptr: *anyopaque,
+    sample_rate: u32,
+    inv_sample_rate: f32,
+    vtable: *const VTable,
 
-pub const Context = struct {
-    // alloc: std.mem.Allocator,
-    scratch: [SCRATCH_BYTES]f32 = std.mem.zeroes([SCRATCH_BYTES]f32),
-    node_store: [MAX_NODE_COUNT]Node = undefined,
-    node_process_list: [MAX_NODE_COUNT]*Node = undefined,
-    sink: Signal = .{ .static = 0.0 },
-    sample_rate: u32 = 44_100,
-    inv_sample_rate: f32 = 1.0 / 44_100.0,
-    ticks: u64 = 0,
-    node_count: u16 = 0,
+    pub const VTable = struct {
+        // register
+        register: *const fn (*anyopaque, *Node) Error!void,
+        // connect (assign node signal)
+        connect: *const fn (*anyopaque, *Signal, Signal) Error!void,
+        // next/process
+        next: *const fn (*anyopaque) f32, // how to push multi-channel?
+        // getHandleVal
+        getHandleVal: *const fn (*anyopaque, usize) f32,
+        // setHandleVal
+        setHandleVal: *const fn (*anyopaque, usize, f32) void,
+        // getHandleSource
+        getHandleSource: *const fn (*anyopaque, usize) *Node,
 
-    // TODO: just one channel's worth of output
-    // Context should be aware of output format (channel count)
-    tmp: [4 * CHANNEL_COUNT]u8 = undefined,
-
-    // Temp compatibility stuff
-    pub fn nextFn(ptr: *anyopaque) ?[]u8 {
-        var ctx: *Context = @ptrCast(@alignCast(ptr));
-
-        const val = std.math.clamp(ctx.next(), -1.0, 1.0);
-        ctx.tmp = std.mem.toBytes(val);
-
-        return &ctx.tmp;
-    }
-
-    pub fn hasNextFn(ptr: *anyopaque) bool {
-        _ = ptr;
-        return true;
-    }
-
-    pub fn source(ptr: *Context) sources.AudioSource {
-        return .{ .ptr = ptr, .nextFn = nextFn, .hasNextFn = hasNextFn };
-    }
-
-    pub const ConcreteA = struct {
-        ctx: *Context,
-        id: []const u8 = "ConcreteA",
-        in: Signal = .{ .static = 1.0 },
-        out: Signal = .{ .static = 0.0 },
-
-        pub const ins = [_]std.meta.FieldEnum(ConcreteA){.in};
-        pub const outs = [_]std.meta.FieldEnum(ConcreteA){.out};
-
-        pub fn process(ptr: *anyopaque) void {
-            const n: *Context.ConcreteA = @ptrCast(@alignCast(ptr));
-
-            n.out.set(n.in.get() * 5.0);
-        }
-
-        pub fn node(self: *ConcreteA) Node {
-            return Node.init(self, ConcreteA);
-        }
+        source: *const fn (*anyopaque) sources.AudioSource,
+        ticks: *const fn (*anyopaque) u64,
     };
 
-    pub const ConcreteSink = struct {
-        ctx: *Context,
-        alloc: std.mem.Allocator,
-        id: []const u8 = "ConcreteSink",
-        inputs: std.ArrayList(Signal),
-        out: Signal = .{ .static = 0.0 },
+    pub fn register(self: IContext, node: *Node) !void {
+        try self.vtable.register(self.ptr, node);
+    }
 
-        pub const ins = [_]std.meta.FieldEnum(ConcreteSink){.inputs};
-        pub const outs = [_]std.meta.FieldEnum(ConcreteSink){.out};
+    pub fn connect(self: IContext, dest: *Signal, val: Signal) !void {
+        try self.vtable.connect(self.ptr, dest, val);
+    }
 
-        pub fn init(ctx: *Context, alloc: std.mem.Allocator) !ConcreteSink {
-            const inputs = std.ArrayList(Signal).init(alloc);
+    pub fn next(self: IContext) f32 {
+        return self.vtable.next(self.ptr);
+    }
+
+    pub fn getHandleVal(self: IContext, idx: usize) f32 {
+        return self.vtable.getHandleVal(self.ptr, idx);
+    }
+    pub fn setHandleVal(self: IContext, idx: usize, val: f32) void {
+        self.vtable.setHandleVal(self.ptr, idx, val);
+    }
+
+    pub fn getHandleSource(self: IContext, idx: usize) *Node {
+        return self.vtable.getHandleSource(self.ptr, idx);
+    }
+
+    pub fn source(self: IContext) sources.AudioSource {
+        return self.vtable.source(self.ptr);
+    }
+
+    pub fn ticks(self: IContext) u64 {
+        return self.vtable.ticks(self.ptr);
+    }
+};
+
+pub const Options = struct {
+    max_node_count: u8 = MAX_NODE_COUNT,
+    scratch_size: u16 = SCRATCH_BYTES,
+    channel_count: u8 = 2,
+};
+pub fn Context(comptime opts: Options) type {
+    return struct {
+        scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
+        node_store: [opts.max_node_count]Node = undefined,
+        node_process_list: [opts.max_node_count]*Node = undefined,
+        root_signal: Signal = .{ .static = 0.0 },
+        format: main.FormatData,
+        ticks: u64 = 0,
+        node_count: u16 = 0,
+
+        // TODO: pass in buffer on init instead
+        sink: [@sizeOf(f32) * opts.channel_count]u8 = undefined,
+
+        pub const Self = @This();
+
+        pub fn context(self: *Self) IContext {
             return .{
-                .ctx = ctx,
-                .alloc = alloc,
-                .inputs = inputs,
+                .ptr = self,
+                .sample_rate = self.format.sample_rate,
+                .inv_sample_rate = self.format.invSampleRate(),
+                .vtable = &.{
+                    .register = register,
+                    .connect = connect,
+                    .next = next,
+                    .getHandleVal = getHandleVal,
+                    .getHandleSource = getHandleSource,
+                    .setHandleVal = setHandleVal,
+                    .source = source,
+                    .ticks = ticks,
+                },
             };
         }
 
-        pub fn deinit(self: *ConcreteSink) void {
-            self.inputs.deinit();
+        pub fn connect(ptr: *anyopaque, dest: *Signal, val: Signal) !void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+
+            dest.* = val;
+
+            self.buildProcessList() catch {
+                return Error.BadProcessList;
+            };
         }
 
-        pub fn process(ptr: *anyopaque) void {
-            const sink: *ConcreteSink = @ptrCast(@alignCast(ptr));
+        // Temp compatibility stuff
+        pub fn nextFn(ptr: *anyopaque) ?[]u8 {
+            var ctx: *Self = @ptrCast(@alignCast(ptr));
 
-            var result: f32 = undefined;
-            var input_count: u8 = 0;
-
-            for (sink.inputs.items) |in| {
-                result += in.get();
-                input_count += 1;
+            const val = std.math.clamp(next(ptr), -1.0, 1.0);
+            const val_bytes = std.mem.toBytes(val);
+            for (0..opts.channel_count) |ch_idx| {
+                @memcpy(ctx.sink[4 * ch_idx .. 4 * ch_idx + 4], val_bytes[0..]);
             }
 
-            result /= @floatFromInt(@max(input_count, 1));
-            sink.out.set(result);
+            return &ctx.sink;
         }
 
-        pub fn node(self: *ConcreteSink) Node {
-            return Node.init(self, ConcreteSink);
+        pub fn hasNextFn(ptr: *anyopaque) bool {
+            _ = ptr;
+            return true;
         }
-    };
 
-    test "sink node" {
-        var ctx = Context{};
+        pub fn source(ptr: *anyopaque) sources.AudioSource {
+            //var ctx: *Self = @ptrCast(@alignCast(ptr));
 
-        var sink = try ConcreteSink.init(&ctx, testing.allocator);
-        defer sink.deinit();
-        var sink_node = sink.node();
+            return .{ .ptr = ptr, .nextFn = nextFn, .hasNextFn = hasNextFn };
+        }
 
-        _ = try ctx.registerNode(&sink_node);
+        // TODO: check for cycles
+        //
+        // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
+        // https://en.wikipedia.org/wiki/Topological_sorting
+        //
+        // Pointer list is built in ctx.node_process_list
+        pub fn buildProcessList(ctx: *Self) !void {
+            var queue = std.fifo.LinearFifo(*Node, .{ .Static = opts.max_node_count }).init();
+            var indegrees: [opts.max_node_count]u8 = .{0} ** opts.max_node_count;
+            var sorted_idx: u8 = 0;
 
-        try sink.inputs.append(.{ .static = 1.0 });
-        try sink.inputs.append(.{ .static = 3.0 });
-        try sink.inputs.append(.{ .static = 8.0 });
+            // std.debug.print("Rebuilding processing list...\n", .{});
 
-        // confirm outlet points to same value
-        try testing.expectEqual(sink_node.out(0).single, &sink.out);
-
-        sink_node.process();
-
-        try testing.expectEqual(4.0, sink_node.out(0).single.*.get());
-    }
-
-    test "ConcreteA node interface" {
-        var ctx = Context{};
-
-        var concrete_a = ConcreteA{ .ctx = &ctx };
-        var node = concrete_a.node();
-
-        concrete_a.out = try ctx.registerNode(&node);
-
-        // confirm outlet points to same value
-        try testing.expectEqual(node.outs()[0].single, &concrete_a.out);
-
-        // test assignment
-        node.port("out").single.* = .{ .ptr = .{
-            .val = @as(*f32, @ptrFromInt(0xDEADBEEF + 1)),
-            .src_node = &node,
-        } };
-    }
-
-    // TODO: check for cycles
-    //
-    // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
-    // https://en.wikipedia.org/wiki/Topological_sorting
-    //
-    // Pointer list is built in ctx.node_process_list
-    pub fn buildProcessList(ctx: *Context) !void {
-        var queue = std.fifo.LinearFifo(*Node, .{ .Static = MAX_NODE_COUNT }).init();
-        var indegrees: [MAX_NODE_COUNT]u8 = .{0} ** MAX_NODE_COUNT;
-        var sorted_idx: u8 = 0;
-
-        // std.debug.print("Rebuilding processing list...\n", .{});
-
-        for (0..ctx.node_count) |idx| {
-            var node = ctx.getHandleSource(idx);
-            for (node.ins()) |inlet| {
-                switch (inlet) {
-                    .single => |single| {
-                        if (single.* == .handle) {
-                            indegrees[idx] += 1;
-                        }
-                    },
-                    .list => |list| {
-                        for (list.items) |i| {
-                            if (i == .handle) {
+            for (0..ctx.node_count) |idx| {
+                var node = getHandleSource(ctx, idx);
+                for (node.ins()) |inlet| {
+                    switch (inlet) {
+                        .single => |single| {
+                            if (single.* == .handle) {
                                 indegrees[idx] += 1;
                             }
-                        }
-                    },
-                    else => {},
+                        },
+                        .list => |list| {
+                            for (list.items) |i| {
+                                if (i == .handle) {
+                                    indegrees[idx] += 1;
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+
+                if (indegrees[idx] == 0) {
+                    try queue.writeItem(node);
                 }
             }
 
-            if (indegrees[idx] == 0) {
-                try queue.writeItem(node);
-            }
-        }
+            while (queue.readItem()) |n| {
+                ctx.node_process_list[sorted_idx] = n;
+                sorted_idx += 1;
 
-        while (queue.readItem()) |n| {
-            ctx.node_process_list[sorted_idx] = n;
-            sorted_idx += 1;
+                // for each outlet, go through node store to find linked nodes
+                // TODO: iterating through the full node list each time we wanna find linked outputs for sure needlessly expensive,
+                // but its whatever for now. processing some kind of adjacency matrix upfront and using that maybe makes more sense
+                for (n.outs()) |out| {
+                    for (0..ctx.node_count) |idx| {
+                        var adj_node = getHandleSource(ctx, idx);
 
-            // std.debug.print("Adding node {s} to {} place:\n", .{ n.id, sorted_idx });
+                        for (adj_node.ins()) |in_port| {
+                            const in_signals: []const Signal = switch (in_port) {
+                                .single => |in_single| &.{in_single.*},
+                                .list => |in_list| in_list.items,
+                                else => unreachable,
+                            };
 
-            // for each outlet, go through node store to find linked nodes
-            // TODO: iterating through the full node list each time we wanna find linked outputs for sure needlessly expensive,
-            // but its whatever for now. processing some kind of adjacency matrix upfront and using that maybe makes more sense
-            for (n.outs()) |out| {
-                for (0..ctx.node_count) |idx| {
-                    var adj_node = ctx.getHandleSource(idx);
-
-                    for (adj_node.ins()) |in_port| {
-                        const in_signals: []const Signal = switch (in_port) {
-                            .single => |in_single| &.{in_single.*},
-                            .list => |in_list| in_list.items,
-                            else => unreachable,
-                        };
-
-                        for (in_signals) |in_item| {
-                            if (std.meta.eql(out.single.*, in_item)) {
-                                // std.debug.print("Connection: {s} -> {s}\n", .{ n.id, adj_node.id });
-
-                                indegrees[idx] -= 1;
-                                if (indegrees[idx] == 0) {
-                                    try queue.writeItem(adj_node);
+                            for (in_signals) |in_item| {
+                                if (std.meta.eql(out.single.*, in_item)) {
+                                    indegrees[idx] -= 1;
+                                    if (indegrees[idx] == 0) {
+                                        try queue.writeItem(adj_node);
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        if (sorted_idx < ctx.node_count) {
-            std.debug.print("uh oh, somethings up. Likely cycle found.\n", .{});
-        }
-    }
-
-    test "nodeDepSort" {
-        // TODO: TK
-    }
-
-    pub fn printNodeList(ctx: *Context) void {
-        std.debug.print("node list:\t", .{});
-        for (0..ctx.node_count) |idx| {
-            const n = ctx.node_process_list[idx];
-            std.debug.print("{s}, ", .{n.id});
-        }
-        std.debug.print("\n", .{});
-    }
-
-    pub fn process(ctx: *Context, should_print: bool) void {
-        // for node in context graph, compute new values
-        for (0..ctx.node_count) |idx| {
-            var node = ctx.node_process_list[idx];
-            node.process();
-            if (should_print == true) {
-                const out = node.out(0);
-
-                const out_val = switch (out) {
-                    .single => |val| val.*.get(),
-                    else => unreachable, // there shouldnt be any list-shaped outputs
-                };
-
-                std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out_val });
+            if (sorted_idx < ctx.node_count) {
+                std.debug.print("uh oh, somethings up. Likely cycle found.\n", .{});
             }
         }
-    }
 
-    test "process" {
-        var ctx = Context{};
+        pub fn printNodeList(ctx: *Self) void {
+            std.debug.print("node list:\t", .{});
+            for (0..ctx.node_count) |idx| {
+                const n = ctx.node_process_list[idx];
+                std.debug.print("{s}, ", .{n.id});
+            }
+            std.debug.print("\n", .{});
+        }
 
-        var concrete_a = Context.ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        var node_a = concrete_a.node();
-        _ = try ctx.registerNode(&node_a);
+        pub fn process(ptr: *anyopaque, should_print: bool) void {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+            // for node in context graph, compute new values
+            for (0..ctx.node_count) |idx| {
+                var node = ctx.node_process_list[idx];
+                node.process();
+                if (should_print == true) {
+                    const out = node.out(0);
 
-        node_a.process();
+                    const out_val = switch (out) {
+                        .single => |val| val.*.get(),
+                        else => unreachable, // there shouldnt be any list-shaped outputs
+                    };
 
-        var concrete_b = Context.ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.port("out").single.* };
-        var node_b = concrete_b.node();
-        _ = try ctx.registerNode(&node_b);
+                    std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out_val });
+                }
+            }
+        }
 
-        node_b.process();
+        pub fn next(ptr: *anyopaque) f32 {
+            var ctx: *Self = @ptrCast(@alignCast(ptr));
 
-        var oscillator = dsp.Oscillator{ .ctx = &ctx, .pitch = node_b.port("out").single.*, .amp = node_a.port("out").single.* };
-        var osc_node = oscillator.node();
-        _ = try ctx.registerNode(&osc_node);
+            // process all nodes
+            process(ptr, false);
 
-        var sink = try Context.ConcreteSink.init(&ctx, testing.allocator);
-        defer sink.deinit();
-        var sink_node = sink.node();
-
-        try sink.inputs.append(concrete_a.out);
-        try sink.inputs.append(concrete_b.out);
-        try sink.inputs.append(oscillator.out);
-
-        _ = try ctx.registerNode(&sink_node);
-
-        ctx.sink = sink_node.port("out").single.*;
-
-        ctx.process(true);
-
-        try testing.expectEqual(5, node_a.port("out").single.*.get()); // TODO: goodness gracious would you look at this nonsense
-        try testing.expectEqual(5, ctx.sink.get());
-        //
-        // lil mini benchmark
-        for (0..44_100) |_| {
-            ctx.process(false);
+            // tick counter
             ctx.ticks += 1;
-        }
-    }
 
-    pub fn next(ctx: *Context) f32 {
-
-        // process all nodes
-        ctx.process(false);
-
-        // tick counter
-        ctx.ticks += 1;
-
-        return ctx.sink.get();
-    }
-
-    // TODO: unregistering, i guess
-    // Reserves space for node and processing output in context
-    pub fn registerNode(ctx: *Context, node: *Node) !Signal {
-        // TODO: assert type has process function with compatible signature
-
-        const store_signal: Signal = .{ .handle = .{ .idx = ctx.node_count, .ctx = ctx } };
-        var n = node.*;
-        n.out(0).single.* = store_signal;
-        ctx.node_store[ctx.node_count] = n;
-
-        ctx.node_count += 1;
-
-        // re-sort node processing list
-        try ctx.buildProcessList();
-
-        return store_signal;
-    }
-
-    test "registerNode" {
-        var ctx = Context{};
-
-        var concrete_a = ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        var node_a = concrete_a.node();
-
-        _ = try ctx.registerNode(&node_a);
-
-        var concrete_b = ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.out(0).single.* };
-        var node_b = concrete_b.node();
-
-        _ = try ctx.registerNode(&node_b);
-
-        try testing.expectEqual(ctx.node_store[0], node_a);
-        try testing.expectEqual(ctx.node_store[1], node_b);
-    }
-
-    fn getListAddress(ctx: *Context, idx: usize) *f32 {
-        return &(ctx.scratch[idx]);
-    }
-
-    test "getListAddress" {
-        var ctx = Context{};
-
-        ctx.scratch[0] = 1;
-        ctx.scratch[1] = 2;
-        ctx.scratch[2] = 3;
-
-        const two_ptr = ctx.getListAddress(1);
-
-        two_ptr.* = 5;
-
-        try testing.expectEqual(5, ctx.scratch[1]);
-    }
-
-    fn getHandleVal(ctx: *Context, idx: usize) f32 {
-        return ctx.getListAddress(idx).*;
-    }
-
-    fn setHandleVal(ctx: *Context, idx: usize, val: f32) void {
-        ctx.scratch[idx] = val;
-    }
-
-    fn getHandleSource(ctx: *Context, idx: usize) *Node {
-        return @constCast(&ctx.node_store[idx]);
-    }
-
-    test "getHandleSource" {
-        var ctx = Context{};
-
-        var concrete_a = ConcreteA{ .ctx = &ctx, .id = "node_a" };
-        var node_a = concrete_a.node();
-
-        _ = try ctx.registerNode(&node_a);
-
-        var concrete_b = ConcreteB{ .ctx = &ctx, .id = "node_b", .in = node_a.outs()[0].single.* };
-        var node_b = concrete_b.node();
-
-        _ = try ctx.registerNode(&node_b);
-
-        try testing.expectEqual(ctx.getHandleSource(0).*, node_a);
-        try testing.expectEqual(ctx.getHandleSource(1).*, node_b);
-
-        try testing.expectEqual(ctx.getHandleSource(1), &ctx.node_store[1]);
-    }
-
-    pub const ConcreteB = struct {
-        ctx: *Context,
-        id: []const u8 = "ConcreteB",
-        in: Signal = .{ .static = 1.0 },
-        multiplier: Signal = .{ .static = 1.0 },
-        out: Signal = .{ .static = 0.0 },
-
-        pub const ins = [_]std.meta.FieldEnum(ConcreteB){ .in, .multiplier };
-        pub const outs = [_]std.meta.FieldEnum(ConcreteB){.out};
-
-        pub fn process(ptr: *anyopaque) void {
-            const n: *ConcreteB = @ptrCast(@alignCast(ptr));
-
-            n.out.set(n.in.get() * n.multiplier.get() + 5.0);
+            return ctx.root_signal.get();
         }
 
-        pub fn node(self: *ConcreteB) Node {
-            return Node.init(self, ConcreteB);
+        pub fn ticks(ptr: *anyopaque) u64 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+
+            return self.ticks;
+        }
+
+        // TODO: unregistering, i guess
+        // TODO: variable size outs
+        // Reserves space for node and processing output in context
+        pub fn register(ptr: *anyopaque, node: *Node) !void {
+            // TODO: assert type has process function with compatible signature
+            var ctx: *Self = @ptrCast(@alignCast(ptr));
+
+            if (ctx.node_count >= opts.max_node_count) {
+                return Error.NoMoreNodeSpace;
+            }
+
+            const store_signal: Signal = .{ .handle = .{ .idx = ctx.node_count, .ctx = ctx.context() } };
+            var n = node.*;
+            n.out(0).single.* = store_signal;
+            ctx.node_store[ctx.node_count] = n;
+
+            ctx.node_count += 1;
+
+            // re-sort node processing list
+            ctx.buildProcessList() catch {
+                return Error.OtherError;
+            };
+        }
+
+        fn getHandleVal(ptr: *anyopaque, idx: usize) f32 {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+            return ctx.scratch[idx];
+        }
+
+        fn setHandleVal(ptr: *anyopaque, idx: usize, val: f32) void {
+            var ctx: *Self = @ptrCast(@alignCast(ptr));
+            ctx.scratch[idx] = val;
+        }
+
+        fn getHandleSource(ptr: *anyopaque, idx: usize) *Node {
+            var ctx: *Self = @ptrCast(@alignCast(ptr));
+            return @constCast(&ctx.node_store[idx]);
         }
     };
-};
+}
 
 // TODO: unsatisfied with this dynamically sized outlet list stuff.
 // Figure out alternative before it permeates through too much of the workings
@@ -447,8 +327,8 @@ pub const Node = struct {
     id: []const u8 = "x",
     num_inlets: u8 = undefined,
     num_outlets: u8 = undefined,
-    inlets: [NODE_PORTLET_COUNT]NodePortlet = undefined,
-    outlets: [NODE_PORTLET_COUNT]NodePortlet = undefined,
+    inlets: [MAX_PORT_COUNT]NodePortlet = undefined,
+    outlets: [MAX_PORT_COUNT]NodePortlet = undefined,
     ptr: *anyopaque,
     processFn: *const fn (*anyopaque) void,
     portletFn: *const fn (*anyopaque, []const u8) NodePortlet,
@@ -506,7 +386,7 @@ pub const Node = struct {
 
 pub const Signal = union(enum) {
     ptr: *f32,
-    handle: struct { idx: u16, ctx: *Context },
+    handle: struct { idx: u16, ctx: IContext },
     static: f32,
 
     pub fn get(s: Signal) f32 {
