@@ -10,28 +10,22 @@ const SCRATCH_BYTES = 1024;
 const MAX_PORT_COUNT = 8;
 const CHANNEL_COUNT = 2;
 
-pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList };
+pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList, NodeGraphCycleDetected };
 pub const IContext = struct {
     ptr: *anyopaque,
+    opts: Options,
     sample_rate: u32,
     inv_sample_rate: f32,
     vtable: *const VTable,
 
     pub const VTable = struct {
-        // register
         register: *const fn (*anyopaque, *Node) Error!void,
-        // connect (assign node signal)
         connect: *const fn (*anyopaque, *Signal, Signal) Error!void,
-        // next/process
-        next: *const fn (*anyopaque) f32, // how to push multi-channel?
-        // getHandleVal
+        next: *const fn (*anyopaque) []u8, // how to push multi-channel?
         getHandleVal: *const fn (*anyopaque, usize) f32,
-        // setHandleVal
         setHandleVal: *const fn (*anyopaque, usize, f32) void,
-        // getHandleSource
         getHandleSource: *const fn (*anyopaque, usize) *Node,
 
-        source: *const fn (*anyopaque) sources.AudioSource,
         ticks: *const fn (*anyopaque) u64,
     };
 
@@ -43,7 +37,7 @@ pub const IContext = struct {
         try self.vtable.connect(self.ptr, dest, val);
     }
 
-    pub fn next(self: IContext) f32 {
+    pub fn next(self: IContext) []u8 {
         return self.vtable.next(self.ptr);
     }
 
@@ -58,10 +52,6 @@ pub const IContext = struct {
         return self.vtable.getHandleSource(self.ptr, idx);
     }
 
-    pub fn source(self: IContext) sources.AudioSource {
-        return self.vtable.source(self.ptr);
-    }
-
     pub fn ticks(self: IContext) u64 {
         return self.vtable.ticks(self.ptr);
     }
@@ -72,6 +62,7 @@ pub const Options = struct {
     scratch_size: u16 = SCRATCH_BYTES,
     channel_count: u8 = 2,
 };
+// TODO: contexts as nodes themselves?
 pub fn Context(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
@@ -82,14 +73,15 @@ pub fn Context(comptime opts: Options) type {
         ticks: u64 = 0,
         node_count: u16 = 0,
 
-        // TODO: pass in buffer on init instead
-        sink: [@sizeOf(f32) * opts.channel_count]u8 = undefined,
+        // Holds the last sample frame
+        sink: [opts.channel_count]f32 = undefined,
 
         pub const Self = @This();
 
         pub fn context(self: *Self) IContext {
             return .{
                 .ptr = self,
+                .opts = opts,
                 .sample_rate = self.format.sample_rate,
                 .inv_sample_rate = self.format.invSampleRate(),
                 .vtable = &.{
@@ -99,7 +91,6 @@ pub fn Context(comptime opts: Options) type {
                     .getHandleVal = getHandleVal,
                     .getHandleSource = getHandleSource,
                     .setHandleVal = setHandleVal,
-                    .source = source,
                     .ticks = ticks,
                 },
             };
@@ -115,42 +106,13 @@ pub fn Context(comptime opts: Options) type {
             };
         }
 
-        // Temp compatibility stuff
-        pub fn nextFn(ptr: *anyopaque) ?[]u8 {
-            var ctx: *Self = @ptrCast(@alignCast(ptr));
-
-            const val = std.math.clamp(next(ptr), -1.0, 1.0);
-            const val_bytes = std.mem.toBytes(val);
-            for (0..opts.channel_count) |ch_idx| {
-                @memcpy(ctx.sink[4 * ch_idx .. 4 * ch_idx + 4], val_bytes[0..]);
-            }
-
-            return &ctx.sink;
-        }
-
-        pub fn hasNextFn(ptr: *anyopaque) bool {
-            _ = ptr;
-            return true;
-        }
-
-        pub fn source(ptr: *anyopaque) sources.AudioSource {
-            //var ctx: *Self = @ptrCast(@alignCast(ptr));
-
-            return .{ .ptr = ptr, .nextFn = nextFn, .hasNextFn = hasNextFn };
-        }
-
-        // TODO: check for cycles
-        //
         // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
         // https://en.wikipedia.org/wiki/Topological_sorting
-        //
-        // Pointer list is built in ctx.node_process_list
+        // TODO: check for cycles
         pub fn buildProcessList(ctx: *Self) !void {
             var queue = std.fifo.LinearFifo(*Node, .{ .Static = opts.max_node_count }).init();
             var indegrees: [opts.max_node_count]u8 = .{0} ** opts.max_node_count;
             var sorted_idx: u8 = 0;
-
-            // std.debug.print("Rebuilding processing list...\n", .{});
 
             for (0..ctx.node_count) |idx| {
                 var node = getHandleSource(ctx, idx);
@@ -210,6 +172,7 @@ pub fn Context(comptime opts: Options) type {
 
             if (sorted_idx < ctx.node_count) {
                 std.debug.print("uh oh, somethings up. Likely cycle found.\n", .{});
+                return Error.NodeGraphCycleDetected;
             }
         }
 
@@ -241,7 +204,7 @@ pub fn Context(comptime opts: Options) type {
             }
         }
 
-        pub fn next(ptr: *anyopaque) f32 {
+        pub fn next(ptr: *anyopaque) []u8 {
             var ctx: *Self = @ptrCast(@alignCast(ptr));
 
             // process all nodes
@@ -250,7 +213,12 @@ pub fn Context(comptime opts: Options) type {
             // tick counter
             ctx.ticks += 1;
 
-            return ctx.root_signal.get();
+            const val = std.math.clamp(ctx.root_signal.get(), -1.0, 1.0);
+            for (0..opts.channel_count) |ch_idx| {
+                ctx.sink[ch_idx] = val;
+            }
+
+            return std.mem.sliceAsBytes(ctx.sink[0..]);
         }
 
         pub fn ticks(ptr: *anyopaque) u64 {
@@ -427,6 +395,9 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
     // Serves as an interface to a concrete class's input and output.
     // Upstream types must designate which fields are input and output data through
     // FieldEnum arrays.
+    //
+    // ^ TODO: We might be able to adjust this in the future by checking structs for fields that are of type Signal, instead of providing explicit
+    // field enum lists.
 
     // S type designates the expected type for inputs and outputs. For now, all inputs and outputs are expected to
     // be the same type, because I can't quite figure out how to make lists of heterogeneous pointers work ergonomically at runtime.
@@ -543,7 +514,6 @@ test "Ports" {
     const P = Ports(PortNode, []const u8);
 
     // TODO: this could use more tests
-
     // getPtr
     try testing.expectEqual(@TypeOf(P.getPtr(&node, .out_back)), *[]const u8);
     try testing.expectEqual(&node.out_back, P.getPtr(&node, .out_back));
