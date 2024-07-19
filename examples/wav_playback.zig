@@ -18,20 +18,26 @@ pub fn main() !void {
         },
     };
 
-    var signal_ctx = zounds.signals.Context{};
+    var graph = zounds.signals.Graph(.{}){
+        .format = config.desired_format,
+    };
+    var graph_ctx = graph.context();
+
+    var filter = zounds.dsp.Filter{ .ctx = graph_ctx, .filter_type = .high_pass };
+    var filter_node = filter.node();
+    _ = try graph_ctx.register(&filter_node);
 
     // file buffer
     const file_buf = try zounds.readers.wav.readWavFile(alloc, "res/PinkPanther30.wav");
 
-    var buffer_playback = zounds.dsp.BufferPlayback{ .ctx = &signal_ctx, .buf = file_buf };
+    var buffer_playback = zounds.dsp.BufferPlayback{ .ctx = graph_ctx, .buf = file_buf };
     var buf_node = buffer_playback.node();
-    _ = try signal_ctx.registerNode(&buf_node);
+    _ = try graph_ctx.register(&buf_node);
+
+    try graph_ctx.connect(filter_node.port("in"), buf_node.port("out"));
+    graph.root_signal = filter_node.port("out").single.*;
 
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
-
-    signal_ctx.sink = buffer_playback.out;
-
-    var context_source = signal_ctx.source();
 
     const device: zounds.Device = .{
         .sample_rate = 44_100,
@@ -42,7 +48,7 @@ pub fn main() !void {
     };
 
     const options: zounds.StreamOptions = .{
-        .write_ref = &context_source,
+        .write_ref = &graph_ctx,
         .format = config.desired_format,
     };
 
@@ -54,7 +60,13 @@ pub fn main() !void {
     std.time.sleep(std.time.ns_per_ms * 10000);
 }
 
-pub fn writeFn(ref: *anyopaque, buf: []u8) void {
-    _ = ref;
-    _ = buf;
+pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {
+    var graph: *zounds.signals.GraphContext = @ptrCast(@alignCast(write_ref));
+
+    const sample_buf: []align(1) f32 = std.mem.bytesAsSlice(f32, buf);
+
+    for (0..num_frames) |frame_idx| {
+        const curr_frame = graph.opts.channel_count * frame_idx;
+        @memcpy(sample_buf[curr_frame .. curr_frame + graph.opts.channel_count], graph.next());
+    }
 }

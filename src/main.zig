@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 pub const utils = @import("utils.zig");
-pub const filters = @import("filters.zig");
 pub const envelope = @import("envelope.zig");
 pub const signals = @import("signals.zig");
 pub const midi = @import("midi.zig");
@@ -18,7 +17,6 @@ pub const Backend = backends.Backend;
 pub const Context = struct {
     alloc: std.mem.Allocator,
     backend: backends.Context,
-    //signal: signals.Context,
 
     pub fn init(comptime backend: ?Backend, allocator: std.mem.Allocator, config: ContextConfig) !Context {
         const backend_ctx: backends.Context = blk: {
@@ -30,12 +28,9 @@ pub const Context = struct {
             // TODO: iterate through list of available backends if not specified
         };
 
-        // const signal_ctx = signals.Context{};
-
         return .{
             .alloc = allocator,
             .backend = backend_ctx,
-            // .signal = signal_ctx,
         };
     }
 
