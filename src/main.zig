@@ -1,6 +1,5 @@
 const std = @import("std");
 const testing = std.testing;
-pub const sources = @import("sources/main.zig");
 pub const utils = @import("utils.zig");
 pub const filters = @import("filters.zig");
 pub const envelope = @import("envelope.zig");
@@ -9,6 +8,7 @@ pub const midi = @import("midi.zig");
 pub const readers = @import("readers/readers.zig");
 pub const backends = @import("backends/backends.zig");
 pub const dsp = @import("dsp/dsp.zig");
+pub const wavegen = @import("wavegen.zig");
 
 // TODO: midi client backends
 pub const coreaudio = @import("backends/coreaudio.zig");

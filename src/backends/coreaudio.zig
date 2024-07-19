@@ -3,7 +3,6 @@ const testing = std.testing;
 const c = @import("compat.zig");
 
 const main = @import("../main.zig");
-const sources = @import("../sources/main.zig");
 const utils = @import("../utils.zig");
 const midi = @import("../midi.zig");
 const backends = @import("backends.zig");

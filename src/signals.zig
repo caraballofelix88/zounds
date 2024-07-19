@@ -2,7 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 
 const main = @import("main.zig");
-const sources = @import("sources/main.zig");
 const dsp = @import("dsp/dsp.zig");
 
 const MAX_NODE_COUNT = 64;
@@ -20,7 +19,7 @@ pub const GraphContext = struct {
 
     pub const VTable = struct {
         register: *const fn (*anyopaque, *Node) Error!void,
-        connect: *const fn (*anyopaque, *Signal, Signal) Error!void,
+        connect: *const fn (*anyopaque, Portlet(Signal), Portlet(Signal)) Error!void,
         next: *const fn (*anyopaque) []f32, // how to push multi-channel?
         getHandleVal: *const fn (*anyopaque, usize) f32,
         setHandleVal: *const fn (*anyopaque, usize, f32) void,
@@ -33,7 +32,7 @@ pub const GraphContext = struct {
         try self.vtable.register(self.ptr, node);
     }
 
-    pub fn connect(self: GraphContext, dest: *Signal, val: Signal) !void {
+    pub fn connect(self: GraphContext, dest: Portlet(Signal), val: Portlet(Signal)) !void {
         try self.vtable.connect(self.ptr, dest, val);
     }
 
@@ -96,10 +95,32 @@ pub fn Graph(comptime opts: Options) type {
             };
         }
 
-        pub fn connect(ptr: *anyopaque, dest: *Signal, val: Signal) !void {
+        // TODO: fix repeated connects to dynamic length ports
+        pub fn connect(ptr: *anyopaque, dest: Portlet(Signal), val: Portlet(Signal)) !void {
             const self: *Self = @ptrCast(@alignCast(ptr));
 
-            dest.* = val;
+            // assign portlet to portlet
+            switch (dest) {
+                .single => |d| {
+                    switch (val) {
+                        .single => |v| {
+                            d.* = v.*;
+                        },
+                        else => unreachable,
+                    }
+                },
+                .list => |d| {
+                    switch (val) {
+                        .single => |v| {
+                            d.append(v.*) catch {
+                                return Error.OtherError;
+                            };
+                        },
+                        else => unreachable,
+                    }
+                },
+                else => unreachable,
+            }
 
             self.buildProcessList() catch {
                 return Error.BadProcessList;
@@ -109,6 +130,7 @@ pub fn Graph(comptime opts: Options) type {
         // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
         // https://en.wikipedia.org/wiki/Topological_sorting
         // TODO: check for cycles
+        // TODO: omit unconnected nodes from processing?
         pub fn buildProcessList(ctx: *Self) !void {
             var queue = std.fifo.LinearFifo(*Node, .{ .Static = opts.max_node_count }).init();
             var indegrees: [opts.max_node_count]u8 = .{0} ** opts.max_node_count;

@@ -54,6 +54,13 @@ pub fn main() !void {
     var signal_graph = zounds.signals.Graph(.{ .channel_count = 2 }){ .format = config.desired_format };
     var graph_ctx = signal_graph.context();
 
+    // build trigger for chord envelope
+    var trigger: f32 = 0.0;
+    var adsr = zounds.dsp.ADSR(.{}){ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
+    var adsr_node = adsr.node();
+
+    _ = try graph_ctx.register(&adsr_node);
+
     var osc_c = zounds.dsp.Oscillator{
         .ctx = graph_ctx,
         .id = "Osc:C",
@@ -63,21 +70,21 @@ pub fn main() !void {
 
     _ = try graph_ctx.register(&c_node);
 
-    var wobbly_e = Wobble{
+    var wobble = Wobble{
         .ctx = graph_ctx,
         .id = "Wobble",
         .frequency = .{ .static = 3.0 },
         .base_pitch = .{ .static = zounds.utils.pitchFromNote(65) },
         .amp = .{ .static = 4.0 },
     };
-    var wobb_node = wobbly_e.node();
+    var wobb_node = wobble.node();
 
     _ = try graph_ctx.register(&wobb_node);
 
     var osc_e = zounds.dsp.Oscillator{
         .ctx = graph_ctx,
         .id = "Osc:E",
-        .pitch = wobbly_e.out,
+        .pitch = wobble.out,
     };
     var e_node = osc_e.node();
 
@@ -92,28 +99,47 @@ pub fn main() !void {
 
     _ = try graph_ctx.register(&g_node);
 
+    // metronome
+    var hiss = zounds.dsp.Oscillator{
+        .ctx = graph_ctx,
+        .id = "hiss",
+        .wavetable = &zounds.wavegen.hiss,
+    };
+    var hiss_node = hiss.node();
+
+    _ = try graph_ctx.register(&hiss_node);
+
+    var click = zounds.dsp.Click{
+        .id = "click",
+        .ctx = graph_ctx,
+    };
+    var click_node = click.node();
+
+    _ = try graph_ctx.register(&click_node);
+
+    try graph_ctx.connect(hiss_node.port("amp"), click_node.port("out"));
+
     var chord = zounds.dsp.Sink.init(graph_ctx, alloc);
     defer chord.deinit();
 
-    var new_chord_node = chord.node();
-    _ = try graph_ctx.register(&new_chord_node);
+    var chord_node = chord.node();
+    _ = try graph_ctx.register(&chord_node);
 
-    _ = try chord.inputs.append(c_node.out(0).single.*);
-    _ = try chord.inputs.append(e_node.out(0).single.*);
-    _ = try chord.inputs.append(g_node.out(0).single.*);
+    // plug adsr into oscillators, plug oscillators into chord
+    const note_nodes = [_]Node{ c_node, e_node, g_node };
+    for (note_nodes) |note| {
+        try graph_ctx.connect(chord_node.port("inputs"), note.port("out"));
+        try graph_ctx.connect(note.port("amp"), adsr_node.port("out"));
+    }
+
+    // plug hiss as well cuz whatever
+    // try graph_ctx.connect(chord_node.port("inputs"), hiss_node.port("out"));
+
+    // assign root signal to signal graph
+    signal_graph.root_signal = chord_node.port("out").single.*;
 
     // TODO: audio context should derive its sample rate from available backend devices/formats, not the raw desired config
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
-
-    var trigger: f32 = 0.0;
-    var adsr = zounds.dsp.ADSR(.{}){ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
-    var adsr_node = adsr.node();
-
-    _ = try graph_ctx.register(&adsr_node);
-
-    chord.amp = adsr.out;
-
-    try graph_ctx.connect(&signal_graph.root_signal, chord.out);
 
     signal_graph.printNodeList();
 
