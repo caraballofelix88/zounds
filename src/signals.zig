@@ -11,7 +11,7 @@ const MAX_PORT_COUNT = 8;
 const CHANNEL_COUNT = 2;
 
 pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList, NodeGraphCycleDetected };
-pub const IContext = struct {
+pub const GraphContext = struct {
     ptr: *anyopaque,
     opts: Options,
     sample_rate: u32,
@@ -21,7 +21,7 @@ pub const IContext = struct {
     pub const VTable = struct {
         register: *const fn (*anyopaque, *Node) Error!void,
         connect: *const fn (*anyopaque, *Signal, Signal) Error!void,
-        next: *const fn (*anyopaque) []u8, // how to push multi-channel?
+        next: *const fn (*anyopaque) []f32, // how to push multi-channel?
         getHandleVal: *const fn (*anyopaque, usize) f32,
         setHandleVal: *const fn (*anyopaque, usize, f32) void,
         getHandleSource: *const fn (*anyopaque, usize) *Node,
@@ -29,30 +29,30 @@ pub const IContext = struct {
         ticks: *const fn (*anyopaque) u64,
     };
 
-    pub fn register(self: IContext, node: *Node) !void {
+    pub fn register(self: GraphContext, node: *Node) !void {
         try self.vtable.register(self.ptr, node);
     }
 
-    pub fn connect(self: IContext, dest: *Signal, val: Signal) !void {
+    pub fn connect(self: GraphContext, dest: *Signal, val: Signal) !void {
         try self.vtable.connect(self.ptr, dest, val);
     }
 
-    pub fn next(self: IContext) []u8 {
+    pub fn next(self: GraphContext) []f32 {
         return self.vtable.next(self.ptr);
     }
 
-    pub fn getHandleVal(self: IContext, idx: usize) f32 {
+    pub fn getHandleVal(self: GraphContext, idx: usize) f32 {
         return self.vtable.getHandleVal(self.ptr, idx);
     }
-    pub fn setHandleVal(self: IContext, idx: usize, val: f32) void {
+    pub fn setHandleVal(self: GraphContext, idx: usize, val: f32) void {
         self.vtable.setHandleVal(self.ptr, idx, val);
     }
 
-    pub fn getHandleSource(self: IContext, idx: usize) *Node {
+    pub fn getHandleSource(self: GraphContext, idx: usize) *Node {
         return self.vtable.getHandleSource(self.ptr, idx);
     }
 
-    pub fn ticks(self: IContext) u64 {
+    pub fn ticks(self: GraphContext) u64 {
         return self.vtable.ticks(self.ptr);
     }
 };
@@ -63,7 +63,7 @@ pub const Options = struct {
     channel_count: u8 = 2,
 };
 // TODO: contexts as nodes themselves?
-pub fn Context(comptime opts: Options) type {
+pub fn Graph(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
         node_store: [opts.max_node_count]Node = undefined,
@@ -78,7 +78,7 @@ pub fn Context(comptime opts: Options) type {
 
         pub const Self = @This();
 
-        pub fn context(self: *Self) IContext {
+        pub fn context(self: *Self) GraphContext {
             return .{
                 .ptr = self,
                 .opts = opts,
@@ -204,7 +204,7 @@ pub fn Context(comptime opts: Options) type {
             }
         }
 
-        pub fn next(ptr: *anyopaque) []u8 {
+        pub fn next(ptr: *anyopaque) []f32 {
             var ctx: *Self = @ptrCast(@alignCast(ptr));
 
             // process all nodes
@@ -213,12 +213,13 @@ pub fn Context(comptime opts: Options) type {
             // tick counter
             ctx.ticks += 1;
 
+            // for now, take single output val and dupe to every channel
             const val = std.math.clamp(ctx.root_signal.get(), -1.0, 1.0);
             for (0..opts.channel_count) |ch_idx| {
                 ctx.sink[ch_idx] = val;
             }
 
-            return std.mem.sliceAsBytes(ctx.sink[0..]);
+            return ctx.sink[0..];
         }
 
         pub fn ticks(ptr: *anyopaque) u64 {
@@ -354,7 +355,7 @@ pub const Node = struct {
 
 pub const Signal = union(enum) {
     ptr: *f32,
-    handle: struct { idx: u16, ctx: IContext },
+    handle: struct { idx: u16, ctx: GraphContext },
     static: f32,
 
     pub fn get(s: Signal) f32 {

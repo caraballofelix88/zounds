@@ -44,7 +44,7 @@ pub fn ADSR(opts: ADSROptions) type {
 
         const Self = @This();
 
-        ctx: signals.IContext,
+        ctx: signals.GraphContext,
         id: []const u8 = "adsr",
         state: Self.State = .off,
         trigger: signals.Signal = .{ .static = 0.0 },

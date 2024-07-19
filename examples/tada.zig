@@ -6,7 +6,7 @@ const Node = zounds.signals.Node;
 
 // simple LFO
 const Wobble = struct {
-    ctx: zounds.signals.IContext,
+    ctx: zounds.signals.GraphContext,
     id: []const u8 = "wobb",
     base_pitch: Signal = .{ .static = 440.0 },
     frequency: Signal = .{ .static = 10.0 },
@@ -51,20 +51,20 @@ pub fn main() !void {
         },
     };
 
-    var signals = zounds.signals.Context(.{ .channel_count = 2 }){ .format = config.desired_format };
-    var signal_ctx = signals.context();
+    var signal_graph = zounds.signals.Graph(.{ .channel_count = 2 }){ .format = config.desired_format };
+    var graph_ctx = signal_graph.context();
 
     var osc_c = zounds.dsp.Oscillator{
-        .ctx = signal_ctx,
+        .ctx = graph_ctx,
         .id = "Osc:C",
         .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
     };
     var c_node = osc_c.node();
 
-    _ = try signal_ctx.register(&c_node);
+    _ = try graph_ctx.register(&c_node);
 
     var wobbly_e = Wobble{
-        .ctx = signal_ctx,
+        .ctx = graph_ctx,
         .id = "Wobble",
         .frequency = .{ .static = 3.0 },
         .base_pitch = .{ .static = zounds.utils.pitchFromNote(65) },
@@ -72,31 +72,31 @@ pub fn main() !void {
     };
     var wobb_node = wobbly_e.node();
 
-    _ = try signal_ctx.register(&wobb_node);
+    _ = try graph_ctx.register(&wobb_node);
 
     var osc_e = zounds.dsp.Oscillator{
-        .ctx = signal_ctx,
+        .ctx = graph_ctx,
         .id = "Osc:E",
         .pitch = wobbly_e.out,
     };
     var e_node = osc_e.node();
 
-    _ = try signal_ctx.register(&e_node);
+    _ = try graph_ctx.register(&e_node);
 
     var osc_g = zounds.dsp.Oscillator{
-        .ctx = signal_ctx,
+        .ctx = graph_ctx,
         .id = "Osc:G",
         .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
     };
     var g_node = osc_g.node();
 
-    _ = try signal_ctx.register(&g_node);
+    _ = try graph_ctx.register(&g_node);
 
-    var chord = zounds.dsp.Sink.init(signal_ctx, alloc);
+    var chord = zounds.dsp.Sink.init(graph_ctx, alloc);
     defer chord.deinit();
 
     var new_chord_node = chord.node();
-    _ = try signal_ctx.register(&new_chord_node);
+    _ = try graph_ctx.register(&new_chord_node);
 
     _ = try chord.inputs.append(c_node.out(0).single.*);
     _ = try chord.inputs.append(e_node.out(0).single.*);
@@ -106,16 +106,16 @@ pub fn main() !void {
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 
     var trigger: f32 = 0.0;
-    var adsr = zounds.dsp.ADSR(.{}){ .ctx = signal_ctx, .trigger = .{ .ptr = &trigger } };
+    var adsr = zounds.dsp.ADSR(.{}){ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
     var adsr_node = adsr.node();
 
-    _ = try signal_ctx.register(&adsr_node);
+    _ = try graph_ctx.register(&adsr_node);
 
     chord.amp = adsr.out;
 
-    try signal_ctx.connect(&signals.root_signal, chord.out);
+    try graph_ctx.connect(&signal_graph.root_signal, chord.out);
 
-    signals.printNodeList();
+    signal_graph.printNodeList();
 
     const device: zounds.Device = .{
         .sample_rate = 44_100,
@@ -126,7 +126,7 @@ pub fn main() !void {
     };
 
     const options: zounds.StreamOptions = .{
-        .write_ref = &signal_ctx,
+        .write_ref = &graph_ctx,
         .format = config.desired_format,
     };
 
@@ -151,21 +151,16 @@ pub fn main() !void {
     std.debug.print("-dah~\n", .{});
     std.time.sleep(std.time.ns_per_ms * 3000);
 
-    std.debug.print("ctx ticks:\t{}\n", .{signal_ctx.ticks()});
+    std.debug.print("ctx ticks:\t{}\n", .{graph_ctx.ticks()});
 }
 
 pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {
-    // TODO: format, frame size should be passed in w ref?
-
-    var graph: *zounds.signals.IContext = @ptrCast(@alignCast(write_ref));
+    var graph: *zounds.signals.GraphContext = @ptrCast(@alignCast(write_ref));
 
     const sample_buf: []align(1) f32 = std.mem.bytesAsSlice(f32, buf);
 
     for (0..num_frames) |frame_idx| {
-        const next_frame: []align(1) f32 = std.mem.bytesAsSlice(f32, graph.next());
-
         const curr_frame = graph.opts.channel_count * frame_idx;
-
-        @memcpy(sample_buf[curr_frame .. curr_frame + graph.opts.channel_count], next_frame);
+        @memcpy(sample_buf[curr_frame .. curr_frame + graph.opts.channel_count], graph.next());
     }
 }
