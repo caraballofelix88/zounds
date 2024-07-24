@@ -82,6 +82,7 @@ test "Status" {
 
 // TODO: sysex won't work w this data structure
 // TODO: provide way to get data value
+// TODO: print formatter
 pub const Message = struct {
     status: Status,
     data: u16 = undefined, // pair of 7-bit values packed together

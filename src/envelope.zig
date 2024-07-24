@@ -183,6 +183,46 @@ pub const adsr: [4]Ramp = .{
     },
 };
 
+pub const ADSRConfig = struct {
+    attack_duration: Duration = .{ .seconds = 0.05 },
+    decay_duration: Duration = .{ .seconds = 0.2 },
+    sustain_duration: Duration = .{ .seconds = 1 },
+    release_duration: Duration = .{ .seconds = 0.3 },
+};
+pub fn generateADSR(config: ADSRConfig) [4]Ramp {
+    return .{
+        .{ // attack
+            .from = 0.0,
+            .to = 1.0,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = config.attack_duration,
+        },
+        .{ // decay
+            .from = 1.0,
+            .to = 0.7,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = config.decay_duration,
+        },
+        .{ // sustain
+            .from = 0.7,
+            .to = 0.5,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = config.sustain_duration,
+        },
+
+        .{ // release
+            .from = 0.5,
+            .to = 0.0,
+            .ramp_type = .linear,
+            .sample_rate = 44_100,
+            .duration = config.release_duration,
+        },
+    };
+}
+
 // TODO: create a method to start at some arbitrary point anywhere within envelope duration? Using context?
 // TODO: how do we make stateless, for reuse across multiple oscillators or MIDI voices?
 //NOTE: stateless kind of a hefty tradeoff, maybe....

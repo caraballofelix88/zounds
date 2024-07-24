@@ -56,7 +56,7 @@ pub fn main() !void {
 
     // build trigger for chord envelope
     var trigger: f32 = 0.0;
-    var adsr = zounds.dsp.ADSR(.{}){ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
+    var adsr = zounds.dsp.ADSR{ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
     var adsr_node = adsr.node();
 
     _ = try graph_ctx.register(&adsr_node);
