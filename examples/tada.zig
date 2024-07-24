@@ -57,18 +57,14 @@ pub fn main() !void {
     // build trigger for chord envelope
     var trigger: f32 = 0.0;
     var adsr = zounds.dsp.ADSR{ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
-    var adsr_node = adsr.node();
-
-    _ = try graph_ctx.register(&adsr_node);
+    var adsr_node = try graph_ctx.register(&adsr);
 
     var osc_c = zounds.dsp.Oscillator{
         .ctx = graph_ctx,
         .id = "Osc:C",
         .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
     };
-    var c_node = osc_c.node();
-
-    _ = try graph_ctx.register(&c_node);
+    const c_node = try graph_ctx.register(&osc_c);
 
     var wobble = Wobble{
         .ctx = graph_ctx,
@@ -77,27 +73,22 @@ pub fn main() !void {
         .base_pitch = .{ .static = zounds.utils.pitchFromNote(65) },
         .amp = .{ .static = 4.0 },
     };
-    var wobb_node = wobble.node();
-
-    _ = try graph_ctx.register(&wobb_node);
+    const wobb_node = try graph_ctx.register(&wobble);
+    _ = wobb_node; // autofix
 
     var osc_e = zounds.dsp.Oscillator{
         .ctx = graph_ctx,
         .id = "Osc:E",
         .pitch = wobble.out,
     };
-    var e_node = osc_e.node();
-
-    _ = try graph_ctx.register(&e_node);
+    const e_node = try graph_ctx.register(&osc_e);
 
     var osc_g = zounds.dsp.Oscillator{
         .ctx = graph_ctx,
         .id = "Osc:G",
         .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
     };
-    var g_node = osc_g.node();
-
-    _ = try graph_ctx.register(&g_node);
+    const g_node = try graph_ctx.register(&osc_g);
 
     // metronome
     var hiss = zounds.dsp.Oscillator{
@@ -105,28 +96,23 @@ pub fn main() !void {
         .id = "hiss",
         .wavetable = &zounds.wavegen.hiss,
     };
-    var hiss_node = hiss.node();
-
-    _ = try graph_ctx.register(&hiss_node);
+    var hiss_node = try graph_ctx.register(&hiss);
 
     var click = zounds.dsp.Click{
         .id = "click",
         .ctx = graph_ctx,
     };
-    var click_node = click.node();
-
-    _ = try graph_ctx.register(&click_node);
+    var click_node = try graph_ctx.register(&click);
 
     try graph_ctx.connect(hiss_node.port("amp"), click_node.port("out"));
 
     var chord = zounds.dsp.Sink.init(graph_ctx, alloc);
     defer chord.deinit();
 
-    var chord_node = chord.node();
-    _ = try graph_ctx.register(&chord_node);
+    var chord_node = try graph_ctx.register(&chord);
 
     // plug adsr into oscillators, plug oscillators into chord
-    const note_nodes = [_]Node{ c_node, e_node, g_node };
+    const note_nodes: []const *Node = &.{ c_node, e_node, g_node };
     for (note_nodes) |note| {
         try graph_ctx.connect(chord_node.port("inputs"), note.port("out"));
         try graph_ctx.connect(note.port("amp"), adsr_node.port("out"));

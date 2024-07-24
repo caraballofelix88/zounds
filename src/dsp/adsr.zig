@@ -45,7 +45,6 @@ pub const ADSR = struct {
             adsr.state = .off;
             adsr.prev_val = 0.0;
             adsr.out.set(0.0);
-            std.debug.print("played out\n", .{});
         }
 
         if (adsr.state == .off) {

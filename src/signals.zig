@@ -5,9 +5,12 @@ const main = @import("main.zig");
 const dsp = @import("dsp/dsp.zig");
 
 const MAX_NODE_COUNT = 64;
-const SCRATCH_BYTES = 1024;
+const SCRATCH_SIZE = 1024;
 const MAX_PORT_COUNT = 8;
 const CHANNEL_COUNT = 2;
+
+pub const NodeHandle = u8;
+pub const SignalHandle = u8;
 
 pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList, NodeGraphCycleDetected };
 pub const GraphContext = struct {
@@ -18,18 +21,32 @@ pub const GraphContext = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        register: *const fn (*anyopaque, *Node) Error!void,
+        register: *const fn (*anyopaque, Node) Error!*Node,
+        deregister: *const fn (*anyopaque, *Node) Error!void,
         connect: *const fn (*anyopaque, Portlet(Signal), Portlet(Signal)) Error!void,
         next: *const fn (*anyopaque) []f32, // how to push multi-channel?
-        getHandleVal: *const fn (*anyopaque, usize) f32,
+        getHandleVal: *const fn (*anyopaque, usize, u8) f32,
         setHandleVal: *const fn (*anyopaque, usize, f32) void,
         getHandleSource: *const fn (*anyopaque, usize) *Node,
 
         ticks: *const fn (*anyopaque) u64,
     };
 
-    pub fn register(self: GraphContext, node: *Node) !void {
-        try self.vtable.register(self.ptr, node);
+    pub fn register(self: GraphContext, node_ptr: anytype) !*Node {
+        const T = @typeInfo(@TypeOf(node_ptr));
+
+        std.debug.assert(T == .Pointer);
+
+        // TODO: assert type has process function with compatible signature
+        const ChildType = T.Pointer.child;
+
+        const node = Node.init(node_ptr, ChildType);
+
+        return try self.vtable.register(self.ptr, node);
+    }
+
+    pub fn deregister(self: GraphContext, node: *Node) !void {
+        try self.vtable.deregister(self.ptr, node);
     }
 
     pub fn connect(self: GraphContext, dest: Portlet(Signal), val: Portlet(Signal)) !void {
@@ -40,8 +57,8 @@ pub const GraphContext = struct {
         return self.vtable.next(self.ptr);
     }
 
-    pub fn getHandleVal(self: GraphContext, idx: usize) f32 {
-        return self.vtable.getHandleVal(self.ptr, idx);
+    pub fn getHandleVal(self: GraphContext, idx: usize, gen: u8) f32 {
+        return self.vtable.getHandleVal(self.ptr, idx, gen);
     }
     pub fn setHandleVal(self: GraphContext, idx: usize, val: f32) void {
         self.vtable.setHandleVal(self.ptr, idx, val);
@@ -58,14 +75,16 @@ pub const GraphContext = struct {
 
 pub const Options = struct {
     max_node_count: u8 = MAX_NODE_COUNT,
-    scratch_size: u16 = SCRATCH_BYTES,
+    scratch_size: u16 = SCRATCH_SIZE,
     channel_count: u8 = 2,
 };
 // TODO: contexts as nodes themselves?
 pub fn Graph(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
+        scratch_gen: [opts.scratch_size]u8 = std.mem.zeroes([opts.scratch_size]u8),
         node_store: [opts.max_node_count]Node = undefined,
+        node_free_list: std.fifo.LinearFifo(u8, .{ .Static = opts.max_node_count }) = std.fifo.LinearFifo(u8, .{ .Static = opts.max_node_count }).init(),
         node_process_list: [opts.max_node_count]*Node = undefined,
         root_signal: Signal = .{ .static = 0.0 },
         format: main.FormatData,
@@ -85,6 +104,8 @@ pub fn Graph(comptime opts: Options) type {
                 .inv_sample_rate = self.format.invSampleRate(),
                 .vtable = &.{
                     .register = register,
+                    // .new_register = new_register,
+                    .deregister = deregister,
                     .connect = connect,
                     .next = next,
                     .getHandleVal = getHandleVal,
@@ -253,8 +274,7 @@ pub fn Graph(comptime opts: Options) type {
         // TODO: unregistering, i guess
         // TODO: variable size outs
         // Reserves space for node and processing output in context
-        pub fn register(ptr: *anyopaque, node: *Node) !void {
-            // TODO: assert type has process function with compatible signature
+        pub fn register(ptr: *anyopaque, node: Node) !*Node {
             var ctx: *Self = @ptrCast(@alignCast(ptr));
 
             if (ctx.node_count >= opts.max_node_count) {
@@ -262,21 +282,35 @@ pub fn Graph(comptime opts: Options) type {
             }
 
             const store_signal: Signal = .{ .handle = .{ .idx = ctx.node_count, .ctx = ctx.context() } };
-            var n = node.*;
-            n.out(0).single.* = store_signal;
-            ctx.node_store[ctx.node_count] = n;
 
-            ctx.node_count += 1;
+            // kinda don't like this reassignment, its kind of opaque
+            node.out(0).single.* = store_signal;
+
+            ctx.node_store[ctx.node_count] = node;
 
             // re-sort node processing list
             ctx.buildProcessList() catch {
-                return Error.OtherError;
+                return Error.BadProcessList;
             };
+
+            ctx.node_count += 1;
+
+            return &ctx.node_store[ctx.node_count - 1];
         }
 
-        fn getHandleVal(ptr: *anyopaque, idx: usize) f32 {
+        pub fn deregister(ptr: *anyopaque, node: *Node) !void {
+            _ = ptr; // autofix
+            _ = node; // autofix
+        }
+
+        fn getHandleVal(ptr: *anyopaque, idx: usize, gen: u8) f32 {
             const ctx: *Self = @ptrCast(@alignCast(ptr));
-            return ctx.scratch[idx];
+
+            if (ctx.scratch_gen[idx] == gen) {
+                return ctx.scratch[idx];
+            }
+
+            return 0.0;
         }
 
         fn setHandleVal(ptr: *anyopaque, idx: usize, val: f32) void {
@@ -377,13 +411,13 @@ pub const Node = struct {
 
 pub const Signal = union(enum) {
     ptr: *f32,
-    handle: struct { idx: u16, ctx: GraphContext },
+    handle: struct { idx: u16, ctx: GraphContext, gen: u8 = 0 },
     static: f32,
 
     pub fn get(s: Signal) f32 {
         return switch (s) {
             .ptr => |ptr| ptr.*,
-            .handle => |handle| handle.ctx.getHandleVal(handle.idx),
+            .handle => |handle| handle.ctx.getHandleVal(handle.idx, handle.gen),
             .static => |val| val,
         };
     }
