@@ -12,7 +12,7 @@ const NoteSynth = struct {
 
 // TODO: how to implement voices? ADSR + filter + a couple of oscs, nested in a single config?
 const PolySynth = struct {
-    id: []const u8 = "synthzizer",
+    id: []const u8 = "zynthezizer",
     ctx: zounds.signals.GraphContext,
     alloc: std.mem.Allocator,
     active_notes: std.MultiArrayList(NoteSynth),
@@ -55,7 +55,7 @@ const PolySynth = struct {
             result += s.active_notes.items(.val)[idx];
         }
 
-        // TODO: this gets crunchy anywhere beyond 4 voices at once
+        // TODO: this gets crunchy anywhere beyond 4 voices at once, how to regulate amplitude envelope with dynamic number of sources?
         result /= 4;
 
         // purge completed notes
@@ -103,7 +103,6 @@ const PolySynth = struct {
             .trigger = 1.0,
         };
 
-        // just break for now
         try s.active_notes.append(s.alloc, new_note);
 
         const adsr = try s.alloc.create(zounds.dsp.ADSR);
@@ -129,7 +128,6 @@ const PolySynth = struct {
     pub fn noteOff(s: *PolySynth, val: u8) void {
         s.mutex.lock();
         defer s.mutex.unlock();
-        errdefer s.mutex.unlock();
 
         for (0..s.active_notes.len) |idx| {
             const note = s.active_notes.items(.note)[idx];
@@ -138,10 +136,6 @@ const PolySynth = struct {
                 return;
             }
         }
-    }
-
-    pub fn node(s: *PolySynth) zounds.signals.Node {
-        return zounds.signals.Node.init(s, PolySynth);
     }
 };
 
@@ -169,8 +163,7 @@ pub fn main() !void {
     var midi_queue_mutex = std.Thread.Mutex{};
 
     var poly_synth = try PolySynth.init(graph_context, alloc);
-    var poly_synth_node = poly_synth.node();
-    _ = try graph_context.register(&poly_synth_node);
+    var poly_synth_node = try graph_context.register(&poly_synth);
 
     var playerContext = try zounds.Context.init(.coreaudio, alloc, config);
     defer playerContext.deinit();
@@ -230,8 +223,8 @@ pub fn main() !void {
     while (!should_stop) {
         std.time.sleep(std.time.ns_per_ms * 16); // approx 60fps
 
-        std.Thread.Mutex.lock(&midi_queue_mutex);
-        defer std.Thread.Mutex.unlock(&midi_queue_mutex);
+        midi_queue_mutex.lock();
+        defer midi_queue_mutex.unlock();
 
         while (midi_msg_queue.readItem()) |msg| {
             std.debug.print("Reading msg in main thread:\t{}\t{}\n", .{ msg.status.kind(), msg });

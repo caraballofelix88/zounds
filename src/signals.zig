@@ -351,12 +351,16 @@ pub fn Graph(comptime opts: Options) type {
                 return Error.NoMoreNodeSpace;
             }
 
+            const next_node_spot = ctx.node_free_list.readItem() orelse ctx.node_count;
+            ctx.node_store[next_node_spot] = node;
+            ctx.node_count += 1;
+
             // reasigns node outsignals after slotting space for them in memeory
             for (node.outs()) |out| {
                 const next_signal_spot = ctx.scratch_free_list.readItem() orelse ctx.signal_count;
 
                 const store_signal: Signal = .{ .handle = .{
-                    .node_idx = @intCast(ctx.node_count),
+                    .node_idx = next_node_spot,
                     .idx = next_signal_spot,
                     .ctx = ctx.context(),
                     .tag = .signal,
@@ -367,18 +371,14 @@ pub fn Graph(comptime opts: Options) type {
                 ctx.signal_count += 1;
             }
 
-            ctx.node_store[ctx.node_count] = node;
-
             // re-sort node processing list
             ctx.buildProcessList() catch {
                 return Error.BadProcessList;
             };
 
-            const next_node_spot = ctx.node_free_list.readItem() orelse ctx.node_count;
             const node_handle = .{ .ctx = ctx.context(), .idx = next_node_spot, .gen = ctx.node_gen[next_node_spot], .tag = .node };
             _ = node_handle; // autofix
 
-            ctx.node_count += 1;
             return &ctx.node_store[next_node_spot];
         }
 

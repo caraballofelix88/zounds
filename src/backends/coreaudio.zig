@@ -273,6 +273,7 @@ fn midiPacketReader(packets: [*c]const c.MIDIPacketList, read_proc_ref: ?*anyopa
 
     std.Thread.Mutex.lock(cb_struct.mut);
     defer std.Thread.Mutex.unlock(cb_struct.mut);
+    errdefer std.Thread.Mutex.unlock(cb_struct.mut);
 
     // not entirely sure why msg needs to be passed as a ref for this to work. Otherwise, param comes through as garbage. Is there some weird ambiguity around passing structs by value?
     cb(&msg, cb_struct.ref.?);
