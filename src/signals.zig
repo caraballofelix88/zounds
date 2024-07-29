@@ -42,9 +42,6 @@ pub const GraphContext = struct {
         deregister: *const fn (*anyopaque, Handle) Error!void,
         connect: *const fn (*anyopaque, Portlet(Signal), Portlet(Signal)) Error!void,
         next: *const fn (*anyopaque) []f32, // how to push multi-channel?
-        getHandleVal: *const fn (*anyopaque, usize, u8) f32,
-        setHandleVal: *const fn (*anyopaque, usize, f32) void,
-        getHandleSource: *const fn (*anyopaque, usize) *Node,
 
         getSignal: *const fn (*anyopaque, Handle) f32,
         getSignalSource: *const fn (*anyopaque, Handle) ?*Node,
@@ -58,7 +55,6 @@ pub const GraphContext = struct {
 
     pub fn register(self: GraphContext, node_ptr: anytype) !*Node {
         const T = @typeInfo(@TypeOf(node_ptr));
-
         std.debug.assert(T == .Pointer);
 
         // TODO: assert type has process function with compatible signature
@@ -81,15 +77,16 @@ pub const GraphContext = struct {
         return self.vtable.next(self.ptr);
     }
 
-    pub fn getHandleVal(self: GraphContext, idx: usize, gen: u8) f32 {
-        return self.vtable.getHandleVal(self.ptr, idx, gen);
-    }
-    pub fn setHandleVal(self: GraphContext, idx: usize, val: f32) void {
-        self.vtable.setHandleVal(self.ptr, idx, val);
+    pub inline fn getSignal(self: GraphContext, hdl: Handle) f32 {
+        return self.vtable.getSignal(self.ptr, hdl);
     }
 
-    pub fn getHandleSource(self: GraphContext, idx: usize) *Node {
-        return self.vtable.getHandleSource(self.ptr, idx);
+    pub inline fn setSignal(self: GraphContext, hdl: Handle, val: f32) void {
+        self.vtable.setSignal(self.ptr, hdl, val);
+    }
+
+    pub inline fn getSignalSource(self: GraphContext, hdl: Handle) ?*Node {
+        return self.vtable.getSignalSource(self.ptr, hdl);
     }
 
     pub inline fn ticks(self: GraphContext) u64 {
@@ -124,6 +121,7 @@ pub fn Graph(comptime opts: Options) type {
         format: main.FormatData,
         ticks: u64 = 0,
         node_count: u16 = 0,
+        signal_count: u16 = 0,
 
         // Holds the last sample frame
         sink: [opts.channel_count]f32 = undefined,
@@ -153,9 +151,6 @@ pub fn Graph(comptime opts: Options) type {
                     .deregister = deregister,
                     .connect = connect,
                     .next = next,
-                    .getHandleVal = getHandleVal,
-                    .getHandleSource = getHandleSource,
-                    .setHandleVal = setHandleVal,
                     .getSignal = getSignal,
                     .getSignalSource = getSignalSource,
                     .setSignal = setSignal,
@@ -356,9 +351,9 @@ pub fn Graph(comptime opts: Options) type {
                 return Error.NoMoreNodeSpace;
             }
 
-            // kinda don't like this reassignment, its kind of opaque
+            // reasigns node outsignals after slotting space for them in memeory
             for (node.outs()) |out| {
-                const next_signal_spot = ctx.scratch_free_list.readItem() orelse ctx.node_count;
+                const next_signal_spot = ctx.scratch_free_list.readItem() orelse ctx.signal_count;
 
                 const store_signal: Signal = .{ .handle = .{
                     .node_idx = @intCast(ctx.node_count),
@@ -369,6 +364,7 @@ pub fn Graph(comptime opts: Options) type {
                 } };
 
                 out.single.* = store_signal;
+                ctx.signal_count += 1;
             }
 
             ctx.node_store[ctx.node_count] = node;
@@ -563,11 +559,6 @@ pub const Node = struct {
     pub fn port(n: Node, field_name: []const u8) NodePortlet {
         return n.portletFn(n.ptr, field_name);
     }
-
-    pub fn handle(n: Node, ctx: GraphContext) Handle {
-        _ = n; // autofix
-        _ = ctx; // autofix
-    }
 };
 
 pub const SignalDirection = enum { in, out };
@@ -599,13 +590,13 @@ pub fn TestSignal(comptime dir: SignalDirection, comptime ValueType: type) type 
 //
 pub const Signal = union(enum) {
     ptr: *f32,
-    handle: struct { idx: u16, ctx: GraphContext, gen: u8 = 0, tag: HandleTag = .signal, node_idx: ?u8 = null },
+    handle: Handle,
     static: f32,
 
     pub fn get(s: Signal) f32 {
         return switch (s) {
             .ptr => |ptr| ptr.*,
-            .handle => |handle| handle.ctx.getHandleVal(handle.idx, handle.gen),
+            .handle => |handle| handle.ctx.getSignal(handle),
             .static => |val| val,
         };
     }
@@ -616,7 +607,7 @@ pub const Signal = union(enum) {
                 ptr.* = v;
             },
             .handle => |handle| {
-                handle.ctx.setHandleVal(handle.idx, v);
+                handle.ctx.setSignal(handle, v);
             },
             .static => {
                 return;

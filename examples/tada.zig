@@ -93,9 +93,6 @@ pub fn main() !void {
 
     trigger = 0.0;
     std.time.sleep(std.time.ns_per_ms * 50);
-    try graph_ctx.deregister(.{ .ctx = graph_ctx, .idx = 3, .gen = 0, .tag = .node });
-    try graph_ctx.deregister(.{ .ctx = graph_ctx, .idx = 2, .gen = 0, .tag = .node });
-    try graph_ctx.deregister(.{ .ctx = graph_ctx, .idx = 1, .gen = 0, .tag = .node });
 
     // dah~
     trigger = 1.0;
