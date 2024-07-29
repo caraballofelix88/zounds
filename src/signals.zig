@@ -9,8 +9,25 @@ const SCRATCH_SIZE = 1024;
 const MAX_PORT_COUNT = 8;
 const CHANNEL_COUNT = 2;
 
-pub const NodeHandle = u8;
-pub const SignalHandle = u8;
+// TODO: handles prolly just need const pointers to an extant context, not a new object every time
+pub const HandleTag = enum { node, signal };
+pub const Handle = struct {
+    tag: HandleTag,
+    idx: u16,
+    node_idx: ?u16 = null, // bookkeeping for signal source nodes
+    ctx: GraphContext,
+    gen: u8 = 0,
+
+    pub inline fn valid(hdl: Handle) bool {
+        // this switch could live inside the context as some get_gen() func, prolly
+        const gen_slice = switch (hdl.tag) {
+            .node => hdl.ctx.node_gen(),
+            .signal => hdl.ctx.signal_gen(),
+        };
+
+        return gen_slice[hdl.idx] <= hdl.gen;
+    }
+};
 
 pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList, NodeGraphCycleDetected };
 pub const GraphContext = struct {
@@ -22,14 +39,21 @@ pub const GraphContext = struct {
 
     pub const VTable = struct {
         register: *const fn (*anyopaque, Node) Error!*Node,
-        deregister: *const fn (*anyopaque, *Node) Error!void,
+        deregister: *const fn (*anyopaque, Handle) Error!void,
         connect: *const fn (*anyopaque, Portlet(Signal), Portlet(Signal)) Error!void,
         next: *const fn (*anyopaque) []f32, // how to push multi-channel?
         getHandleVal: *const fn (*anyopaque, usize, u8) f32,
         setHandleVal: *const fn (*anyopaque, usize, f32) void,
         getHandleSource: *const fn (*anyopaque, usize) *Node,
 
+        getSignal: *const fn (*anyopaque, Handle) f32,
+        getSignalSource: *const fn (*anyopaque, Handle) ?*Node,
+        setSignal: *const fn (*anyopaque, Handle, f32) void,
+        getNode: *const fn (*anyopaque, Handle) ?*Node,
+
         ticks: *const fn (*anyopaque) u64,
+        node_gen: *const fn (*anyopaque) []u8,
+        signal_gen: *const fn (*anyopaque) []u8,
     };
 
     pub fn register(self: GraphContext, node_ptr: anytype) !*Node {
@@ -45,8 +69,8 @@ pub const GraphContext = struct {
         return try self.vtable.register(self.ptr, node);
     }
 
-    pub fn deregister(self: GraphContext, node: *Node) !void {
-        try self.vtable.deregister(self.ptr, node);
+    pub fn deregister(self: GraphContext, hdl: Handle) !void {
+        try self.vtable.deregister(self.ptr, hdl);
     }
 
     pub fn connect(self: GraphContext, dest: Portlet(Signal), val: Portlet(Signal)) !void {
@@ -68,8 +92,16 @@ pub const GraphContext = struct {
         return self.vtable.getHandleSource(self.ptr, idx);
     }
 
-    pub fn ticks(self: GraphContext) u64 {
+    pub inline fn ticks(self: GraphContext) u64 {
         return self.vtable.ticks(self.ptr);
+    }
+
+    pub inline fn node_gen(self: GraphContext) []u8 {
+        return self.vtable.node_gen(self.ptr);
+    }
+
+    pub inline fn signal_gen(self: GraphContext) []u8 {
+        return self.vtable.signal_gen(self.ptr);
     }
 };
 
@@ -83,8 +115,10 @@ pub fn Graph(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
         scratch_gen: [opts.scratch_size]u8 = std.mem.zeroes([opts.scratch_size]u8),
+        scratch_free_list: std.fifo.LinearFifo(u16, .{ .Static = opts.scratch_size }) = std.fifo.LinearFifo(u16, .{ .Static = opts.scratch_size }).init(),
         node_store: [opts.max_node_count]Node = undefined,
-        node_free_list: std.fifo.LinearFifo(u8, .{ .Static = opts.max_node_count }) = std.fifo.LinearFifo(u8, .{ .Static = opts.max_node_count }).init(),
+        node_gen: [opts.max_node_count]u8 = std.mem.zeroes([opts.max_node_count]u8),
+        node_free_list: std.fifo.LinearFifo(u16, .{ .Static = opts.max_node_count }) = std.fifo.LinearFifo(u16, .{ .Static = opts.max_node_count }).init(),
         node_process_list: [opts.max_node_count]*Node = undefined,
         root_signal: Signal = .{ .static = 0.0 },
         format: main.FormatData,
@@ -96,6 +130,18 @@ pub fn Graph(comptime opts: Options) type {
 
         pub const Self = @This();
 
+        pub fn node_gen(ptr: *anyopaque) []u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+
+            return self.node_gen[0..];
+        }
+
+        pub fn signal_gen(ptr: *anyopaque) []u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+
+            return self.scratch_gen[0..];
+        }
+
         pub fn context(self: *Self) GraphContext {
             return .{
                 .ptr = self,
@@ -104,14 +150,19 @@ pub fn Graph(comptime opts: Options) type {
                 .inv_sample_rate = self.format.invSampleRate(),
                 .vtable = &.{
                     .register = register,
-                    // .new_register = new_register,
                     .deregister = deregister,
                     .connect = connect,
                     .next = next,
                     .getHandleVal = getHandleVal,
                     .getHandleSource = getHandleSource,
                     .setHandleVal = setHandleVal,
+                    .getSignal = getSignal,
+                    .getSignalSource = getSignalSource,
+                    .setSignal = setSignal,
+                    .getNode = getNode,
                     .ticks = ticks,
+                    .node_gen = node_gen,
+                    .signal_gen = signal_gen,
                 },
             };
         }
@@ -148,74 +199,99 @@ pub fn Graph(comptime opts: Options) type {
             };
         }
 
-        // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
-        // https://en.wikipedia.org/wiki/Topological_sorting
-        // TODO: check for cycles
-        // TODO: omit unconnected nodes from processing?
-        pub fn buildProcessList(ctx: *Self) !void {
-            var queue = std.fifo.LinearFifo(*Node, .{ .Static = opts.max_node_count }).init();
-            var indegrees: [opts.max_node_count]u8 = .{0} ** opts.max_node_count;
-            var sorted_idx: u8 = 0;
+        pub const AdjMatrix = [opts.max_node_count][opts.max_node_count]bool;
 
-            for (0..ctx.node_count) |idx| {
-                var node = getHandleSource(ctx, idx);
+        fn getAdjMatrix(nodes: []Node) AdjMatrix {
+            var adj: AdjMatrix = undefined;
+
+            for (nodes, 0..) |*node, idx| {
                 for (node.ins()) |inlet| {
                     switch (inlet) {
                         .single => |single| {
                             if (single.* == .handle) {
-                                indegrees[idx] += 1;
+                                const src_node_idx = single.handle.node_idx.?;
+                                adj[idx][src_node_idx] = true;
                             }
                         },
                         .list => |list| {
                             for (list.items) |i| {
                                 if (i == .handle) {
-                                    indegrees[idx] += 1;
+                                    const src_node_idx = i.handle.node_idx.?;
+                                    adj[idx][src_node_idx] = true;
                                 }
                             }
                         },
                         else => {},
                     }
                 }
+            }
 
-                if (indegrees[idx] == 0) {
-                    try queue.writeItem(node);
+            return adj;
+        }
+
+        fn indegree(matrix: AdjMatrix, idx: usize) u8 {
+            var result: u8 = 0;
+            for (0..matrix.len) |i| {
+                if (matrix[idx][i]) {
+                    result += 1;
+                }
+            }
+            return result;
+        }
+
+        fn outdegree(matrix: AdjMatrix, idx: usize) u8 {
+            var result: u8 = 0;
+            for (0..matrix.len) |i| {
+                if (matrix[i][idx]) {
+                    result += 1;
+                }
+            }
+            return result;
+        }
+
+        fn printList(matrix: AdjMatrix, n: u8) void {
+            std.debug.print("List:\n\n", .{});
+
+            for (matrix[0..n]) |row| {
+                std.debug.print("{any}\n", .{row[0..n]});
+            }
+            std.debug.print("\n", .{});
+        }
+
+        // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
+        // https://en.wikipedia.org/wiki/Topological_sorting
+        // TODO: omit unconnected nodes from processing?
+        pub fn buildProcessList(ctx: *Self) !void {
+            const NodeWithIndex = struct { node: *Node, idx: u8 };
+            var queue = std.fifo.LinearFifo(NodeWithIndex, .{ .Static = opts.max_node_count }).init();
+            var adj_matrix: AdjMatrix = getAdjMatrix(ctx.node_store[0..]);
+            var processed_nodes: u8 = 0;
+
+            for (0..ctx.node_count) |idx| {
+                if (indegree(adj_matrix, idx) == 0) {
+                    try queue.writeItem(.{ .node = &ctx.node_store[idx], .idx = @intCast(idx) });
                 }
             }
 
-            while (queue.readItem()) |n| {
-                ctx.node_process_list[sorted_idx] = n;
-                sorted_idx += 1;
+            while (queue.readItem()) |item| {
+                ctx.node_process_list[processed_nodes] = item.node;
+                processed_nodes += 1;
 
-                // for each outlet, go through node store to find linked nodes
-                // TODO: iterating through the full node list each time we wanna find linked outputs for sure needlessly expensive,
-                // but its whatever for now. processing some kind of adjacency matrix upfront and using that maybe makes more sense
-                for (n.outs()) |out| {
-                    for (0..ctx.node_count) |idx| {
-                        var adj_node = getHandleSource(ctx, idx);
-
-                        for (adj_node.ins()) |in_port| {
-                            const in_signals: []const Signal = switch (in_port) {
-                                .single => |in_single| &.{in_single.*},
-                                .list => |in_list| in_list.items,
-                                else => unreachable,
-                            };
-
-                            for (in_signals) |in_item| {
-                                if (std.meta.eql(out.single.*, in_item)) {
-                                    indegrees[idx] -= 1;
-                                    if (indegrees[idx] == 0) {
-                                        try queue.writeItem(adj_node);
-                                    }
-                                }
-                            }
+                // remove processed node from list
+                for (0..adj_matrix.len) |idx| {
+                    if (adj_matrix[idx][item.idx]) {
+                        adj_matrix[idx][item.idx] = false;
+                        if (indegree(adj_matrix, idx) == 0) {
+                            try queue.writeItem(.{ .node = &ctx.node_store[idx], .idx = @intCast(idx) });
                         }
                     }
                 }
             }
 
-            if (sorted_idx < ctx.node_count) {
+            if (processed_nodes < ctx.node_count) {
                 std.debug.print("uh oh, somethings up. Likely cycle found.\n", .{});
-                return Error.NodeGraphCycleDetected;
+                std.debug.print("node count: {}\tprocessed nodes:{}\n", .{ ctx.node_count, processed_nodes });
+                return Error.BadProcessList;
             }
         }
 
@@ -271,7 +347,6 @@ pub fn Graph(comptime opts: Options) type {
             return self.ticks;
         }
 
-        // TODO: unregistering, i guess
         // TODO: variable size outs
         // Reserves space for node and processing output in context
         pub fn register(ptr: *anyopaque, node: Node) !*Node {
@@ -281,10 +356,20 @@ pub fn Graph(comptime opts: Options) type {
                 return Error.NoMoreNodeSpace;
             }
 
-            const store_signal: Signal = .{ .handle = .{ .idx = ctx.node_count, .ctx = ctx.context() } };
-
             // kinda don't like this reassignment, its kind of opaque
-            node.out(0).single.* = store_signal;
+            for (node.outs()) |out| {
+                const next_signal_spot = ctx.scratch_free_list.readItem() orelse ctx.node_count;
+
+                const store_signal: Signal = .{ .handle = .{
+                    .node_idx = @intCast(ctx.node_count),
+                    .idx = next_signal_spot,
+                    .ctx = ctx.context(),
+                    .tag = .signal,
+                    .gen = ctx.scratch_gen[next_signal_spot],
+                } };
+
+                out.single.* = store_signal;
+            }
 
             ctx.node_store[ctx.node_count] = node;
 
@@ -293,14 +378,44 @@ pub fn Graph(comptime opts: Options) type {
                 return Error.BadProcessList;
             };
 
-            ctx.node_count += 1;
+            const next_node_spot = ctx.node_free_list.readItem() orelse ctx.node_count;
+            const node_handle = .{ .ctx = ctx.context(), .idx = next_node_spot, .gen = ctx.node_gen[next_node_spot], .tag = .node };
+            _ = node_handle; // autofix
 
-            return &ctx.node_store[ctx.node_count - 1];
+            ctx.node_count += 1;
+            return &ctx.node_store[next_node_spot];
         }
 
-        pub fn deregister(ptr: *anyopaque, node: *Node) !void {
-            _ = ptr; // autofix
-            _ = node; // autofix
+        pub fn deregister(ptr: *anyopaque, hdl: Handle) !void {
+            var ctx: *Self = @ptrCast(@alignCast(ptr));
+
+            if (ctx.node_count == 0 or ctx.node_count <= hdl.idx or hdl.tag != .node) {
+                return;
+            }
+
+            if (getNode(ctx, hdl)) |node| {
+                for (node.outs()) |out| {
+                    // increment gen on all signals for node
+                    switch (out.get(0).*) {
+                        .handle => |out_hdl| {
+                            ctx.scratch_gen[out_hdl.idx] += 1;
+                            ctx.scratch_free_list.writeItem(out_hdl.idx) catch {
+                                return Error.OtherError;
+                            };
+                        },
+                        else => {},
+                    }
+                }
+            }
+
+            ctx.node_gen[hdl.idx] += 1;
+            ctx.node_free_list.writeItem(hdl.idx) catch {
+                return Error.OtherError;
+            };
+
+            ctx.buildProcessList() catch {
+                return error.BadProcessList;
+            };
         }
 
         fn getHandleVal(ptr: *anyopaque, idx: usize, gen: u8) f32 {
@@ -322,6 +437,46 @@ pub fn Graph(comptime opts: Options) type {
             var ctx: *Self = @ptrCast(@alignCast(ptr));
             return @constCast(&ctx.node_store[idx]);
         }
+
+        fn getSignal(ptr: *anyopaque, hdl: Handle) f32 {
+            if (hdl.tag != .signal or !hdl.valid()) {
+                return 0.0;
+            }
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+
+            return ctx.scratch[hdl.idx];
+        }
+
+        fn getSignalSource(ptr: *anyopaque, hdl: Handle) ?*Node {
+            if (hdl.tag != .signal or !hdl.valid()) {
+                return null;
+            }
+
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+
+            return &ctx.node_store[hdl.node_idx.?];
+        }
+
+        pub fn setSignal(ptr: *anyopaque, hdl: Handle, val: f32) void {
+            if (hdl.tag != .signal or !hdl.valid()) {
+                return;
+            }
+
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+
+            ctx.scratch[hdl.idx] = val;
+        }
+
+        fn getNode(ptr: *anyopaque, hdl: Handle) ?*Node {
+            if (hdl.tag != .node or !hdl.valid()) {
+                std.debug.print("null node: {}\n\n", .{hdl});
+                return null;
+            }
+
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+
+            return &ctx.node_store[hdl.idx];
+        }
     };
 }
 
@@ -341,8 +496,9 @@ pub fn Portlet(T: type) type {
             const n = idx orelse 0;
             return switch (s) {
                 .single => |val| val,
-                .maybe => |maybe_val| maybe_val.?,
+                // .maybe => |maybe_val| maybe_val,
                 .list => |list| &list.items[n],
+                else => unreachable, // TODO: sort out or remove "maybe" branch
             };
         }
     };
@@ -386,7 +542,7 @@ pub const Node = struct {
         n.processFn(n.ptr);
     }
 
-    pub fn ins(n: *Node) []NodePortlet {
+    pub fn ins(n: Node) []const NodePortlet {
         return n.inlets[0..n.num_inlets];
     }
 
@@ -400,18 +556,50 @@ pub const Node = struct {
         return n.outlets[idx];
     }
 
-    pub fn outs(n: *Node) []NodePortlet {
+    pub fn outs(n: Node) []const NodePortlet {
         return n.outlets[0..n.num_outlets];
     }
 
     pub fn port(n: Node, field_name: []const u8) NodePortlet {
         return n.portletFn(n.ptr, field_name);
     }
+
+    pub fn handle(n: Node, ctx: GraphContext) Handle {
+        _ = n; // autofix
+        _ = ctx; // autofix
+    }
 };
 
+pub const SignalDirection = enum { in, out };
+pub fn TestSignal(comptime dir: SignalDirection, comptime ValueType: type) type {
+    // opportunity to enforce unidirectional data flow, here
+
+    return struct {
+        const Self = @This();
+
+        pub fn get(s: Self) ValueType {
+            _ = s; // autofix
+        }
+
+        pub fn set(s: Self, v: ValueType) void {
+            _ = s; // autofix
+            _ = v; // autofix
+            if (dir != .out) {
+                return;
+            }
+        }
+    };
+}
+
+//
+// Signal ideas
+// direction: in, out
+// type_tag: type enum, dictates shape of value
+// SignalValue(T): dictates source of signal, effectively the stuff below
+//
 pub const Signal = union(enum) {
     ptr: *f32,
-    handle: struct { idx: u16, ctx: GraphContext, gen: u8 = 0 },
+    handle: struct { idx: u16, ctx: GraphContext, gen: u8 = 0, tag: HandleTag = .signal, node_idx: ?u8 = null },
     static: f32,
 
     pub fn get(s: Signal) f32 {

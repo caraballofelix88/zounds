@@ -4,39 +4,6 @@ const zounds = @import("zounds");
 const Signal = zounds.signals.Signal;
 const Node = zounds.signals.Node;
 
-// simple LFO
-const Wobble = struct {
-    ctx: zounds.signals.GraphContext,
-    id: []const u8 = "wobb",
-    base_pitch: Signal = .{ .static = 440.0 },
-    frequency: Signal = .{ .static = 10.0 },
-
-    amp: Signal = .{ .static = 10.0 },
-    out: Signal = .{ .static = 0.0 },
-    phase: f32 = 0,
-
-    pub const ins = .{ .base_pitch, .frequency, .amp };
-    pub const outs = .{.out};
-
-    pub fn process(ptr: *anyopaque) void {
-        var w: *Wobble = @ptrCast(@alignCast(ptr));
-
-        const result = w.base_pitch.get() + w.amp.get() * std.math.sin(w.phase);
-
-        w.phase += std.math.tau * w.frequency.get() * w.ctx.inv_sample_rate;
-
-        while (w.phase >= std.math.tau) {
-            w.phase -= std.math.tau;
-        }
-
-        w.out.set(result);
-    }
-
-    pub fn node(ptr: *Wobble) Node {
-        return Node.init(ptr, Wobble);
-    }
-};
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
@@ -66,20 +33,10 @@ pub fn main() !void {
     };
     const c_node = try graph_ctx.register(&osc_c);
 
-    var wobble = Wobble{
-        .ctx = graph_ctx,
-        .id = "Wobble",
-        .frequency = .{ .static = 3.0 },
-        .base_pitch = .{ .static = zounds.utils.pitchFromNote(65) },
-        .amp = .{ .static = 4.0 },
-    };
-    const wobb_node = try graph_ctx.register(&wobble);
-    _ = wobb_node; // autofix
-
     var osc_e = zounds.dsp.Oscillator{
         .ctx = graph_ctx,
         .id = "Osc:E",
-        .pitch = wobble.out,
+        .pitch = .{ .static = zounds.utils.pitchFromNote(65) },
     };
     const e_node = try graph_ctx.register(&osc_e);
 
@@ -89,22 +46,6 @@ pub fn main() !void {
         .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
     };
     const g_node = try graph_ctx.register(&osc_g);
-
-    // metronome
-    var hiss = zounds.dsp.Oscillator{
-        .ctx = graph_ctx,
-        .id = "hiss",
-        .wavetable = &zounds.wavegen.hiss,
-    };
-    var hiss_node = try graph_ctx.register(&hiss);
-
-    var click = zounds.dsp.Click{
-        .id = "click",
-        .ctx = graph_ctx,
-    };
-    var click_node = try graph_ctx.register(&click);
-
-    try graph_ctx.connect(hiss_node.port("amp"), click_node.port("out"));
 
     var chord = zounds.dsp.Sink.init(graph_ctx, alloc);
     defer chord.deinit();
@@ -118,16 +59,11 @@ pub fn main() !void {
         try graph_ctx.connect(note.port("amp"), adsr_node.port("out"));
     }
 
-    // plug hiss as well cuz whatever
-    // try graph_ctx.connect(chord_node.port("inputs"), hiss_node.port("out"));
-
     // assign root signal to signal graph
     signal_graph.root_signal = chord_node.port("out").single.*;
 
     // TODO: audio context should derive its sample rate from available backend devices/formats, not the raw desired config
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
-
-    signal_graph.printNodeList();
 
     const device: zounds.Device = .{
         .sample_rate = 44_100,
@@ -157,6 +93,9 @@ pub fn main() !void {
 
     trigger = 0.0;
     std.time.sleep(std.time.ns_per_ms * 50);
+    try graph_ctx.deregister(.{ .ctx = graph_ctx, .idx = 3, .gen = 0, .tag = .node });
+    try graph_ctx.deregister(.{ .ctx = graph_ctx, .idx = 2, .gen = 0, .tag = .node });
+    try graph_ctx.deregister(.{ .ctx = graph_ctx, .idx = 1, .gen = 0, .tag = .node });
 
     // dah~
     trigger = 1.0;
