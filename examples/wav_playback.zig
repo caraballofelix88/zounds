@@ -35,7 +35,7 @@ pub fn main() !void {
     _ = try graph_ctx.register(&buf_node);
 
     try graph_ctx.connect(filter_node.port("in"), buf_node.port("out"));
-    graph.root_signal = filter_node.port("out").single.*;
+    graph.root_signal = filter_node.port("out").*;
 
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 

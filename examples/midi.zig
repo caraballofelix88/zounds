@@ -214,7 +214,7 @@ pub fn main() !void {
         }
     }
 
-    graph.root_signal = poly_synth_node.port("out").single.*;
+    graph.root_signal = poly_synth_node.port("out").*;
 
     try midi_client.connectInputSource(selected_option - 1);
     player.play();

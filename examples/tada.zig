@@ -47,20 +47,21 @@ pub fn main() !void {
     };
     const g_node = try graph_ctx.register(&osc_g);
 
-    var chord = zounds.dsp.Sink.init(graph_ctx, alloc);
-    defer chord.deinit();
+    var chord = zounds.dsp.Sink(3){ .ctx = graph_ctx };
 
     var chord_node = try graph_ctx.register(&chord);
 
     // plug adsr into oscillators, plug oscillators into chord
     const note_nodes: []const *Node = &.{ c_node, e_node, g_node };
-    for (note_nodes) |note| {
-        try graph_ctx.connect(chord_node.port("inputs"), note.port("out"));
+    for (note_nodes, 0..) |note, idx| {
+        var field_name_buf: [32]u8 = undefined;
+        const field_str = try std.fmt.bufPrint(&field_name_buf, "in_{}", .{idx + 1});
+        try graph_ctx.connect(chord_node.port(field_str), note.port("out"));
         try graph_ctx.connect(note.port("amp"), adsr_node.port("out"));
     }
 
     // assign root signal to signal graph
-    signal_graph.root_signal = chord_node.port("out").single.*;
+    signal_graph.root_signal = chord_node.port("out").*;
 
     // TODO: audio context should derive its sample rate from available backend devices/formats, not the raw desired config
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);

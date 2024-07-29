@@ -66,7 +66,7 @@ pub fn main() !void {
 
     graph_ctx.connect(osc_node.port("pitch"), wobb_node.port("out"));
 
-    signal_graph.root_signal = osc_node.port("out").single.*;
+    signal_graph.root_signal = osc_node.port("out").*;
 
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 

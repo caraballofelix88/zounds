@@ -1,47 +1,38 @@
 const std = @import("std");
 const signals = @import("../signals.zig");
 
-pub const Sink = struct {
-    ctx: signals.GraphContext,
-    alloc: std.mem.Allocator,
-    id: []const u8 = "Sink",
-    inputs: std.ArrayList(signals.Signal),
-    amp: signals.Signal = .{ .static = 1.0 },
-    out: signals.Signal = .{ .static = 0.0 },
+pub fn Sink(num_ins: u8) type {
+    _ = num_ins; // autofix
+    // TODO: dynamic struct fields, based on inputs?
 
-    pub const ins = [_]std.meta.FieldEnum(Sink){ .inputs, .amp };
-    pub const outs = [_]std.meta.FieldEnum(Sink){.out};
+    return struct {
+        ctx: signals.GraphContext,
+        id: []const u8 = "Sink",
+        in_1: signals.Signal = .{ .static = 0.0 },
+        in_2: signals.Signal = .{ .static = 0.0 },
+        in_3: signals.Signal = .{ .static = 0.0 },
+        amp: signals.Signal = .{ .static = 1.0 },
+        out: signals.Signal = .{ .static = 0.0 },
 
-    pub fn init(ctx: signals.GraphContext, alloc: std.mem.Allocator) Sink {
-        const inputs = std.ArrayList(signals.Signal).init(alloc);
-        return .{
-            .ctx = ctx,
-            .alloc = alloc,
-            .inputs = inputs,
-        };
-    }
+        const Self = @This();
 
-    pub fn deinit(self: *Sink) void {
-        self.inputs.deinit();
-    }
+        pub const ins = [_]std.meta.FieldEnum(Self){ .in_1, .in_2, .in_3, .amp };
+        pub const outs = [_]std.meta.FieldEnum(Self){.out};
 
-    pub fn process(ptr: *anyopaque) void {
-        const sink: *Sink = @ptrCast(@alignCast(ptr));
+        pub fn process(ptr: *anyopaque) void {
+            const sink: *Self = @ptrCast(@alignCast(ptr));
 
-        var result: f32 = undefined;
-        var input_count: u8 = 0;
+            var result: f32 = undefined;
+            var input_count: u8 = 0;
 
-        for (sink.inputs.items) |in| {
-            result += in.get();
-            input_count += 1;
+            inline for (&.{ sink.in_1, sink.in_2, sink.in_3 }) |in| {
+                result += in.get();
+                input_count += 1;
+            }
+
+            result /= @floatFromInt(@max(input_count, 1));
+            result *= sink.amp.get();
+            sink.out.set(result);
         }
-
-        result /= @floatFromInt(@max(input_count, 1));
-        result *= sink.amp.get();
-        sink.out.set(result);
-    }
-
-    pub fn node(self: *Sink) signals.Node {
-        return signals.Node.init(self, Sink);
-    }
-};
+    };
+}

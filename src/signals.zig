@@ -40,7 +40,7 @@ pub const GraphContext = struct {
     pub const VTable = struct {
         register: *const fn (*anyopaque, Node) Error!*Node,
         deregister: *const fn (*anyopaque, Handle) Error!void,
-        connect: *const fn (*anyopaque, Portlet(Signal), Portlet(Signal)) Error!void,
+        connect: *const fn (*anyopaque, *Signal, *Signal) Error!void,
         next: *const fn (*anyopaque) []f32, // how to push multi-channel?
 
         getSignal: *const fn (*anyopaque, Handle) f32,
@@ -69,7 +69,7 @@ pub const GraphContext = struct {
         try self.vtable.deregister(self.ptr, hdl);
     }
 
-    pub fn connect(self: GraphContext, dest: Portlet(Signal), val: Portlet(Signal)) !void {
+    pub fn connect(self: GraphContext, dest: *Signal, val: *Signal) !void {
         try self.vtable.connect(self.ptr, dest, val);
     }
 
@@ -87,6 +87,10 @@ pub const GraphContext = struct {
 
     pub inline fn getSignalSource(self: GraphContext, hdl: Handle) ?*Node {
         return self.vtable.getSignalSource(self.ptr, hdl);
+    }
+
+    pub inline fn getNode(self: GraphContext, hdl: Handle) ?*Node {
+        return self.vtable.getNode(self.ptr, hdl);
     }
 
     pub inline fn ticks(self: GraphContext) u64 {
@@ -163,31 +167,9 @@ pub fn Graph(comptime opts: Options) type {
         }
 
         // TODO: fix repeated connects to dynamic length ports
-        pub fn connect(ptr: *anyopaque, dest: Portlet(Signal), val: Portlet(Signal)) !void {
+        pub fn connect(ptr: *anyopaque, dest: *Signal, val: *Signal) !void {
             const self: *Self = @ptrCast(@alignCast(ptr));
-
-            // assign portlet to portlet
-            switch (dest) {
-                .single => |d| {
-                    switch (val) {
-                        .single => |v| {
-                            d.* = v.*;
-                        },
-                        else => unreachable,
-                    }
-                },
-                .list => |d| {
-                    switch (val) {
-                        .single => |v| {
-                            d.append(v.*) catch {
-                                return Error.OtherError;
-                            };
-                        },
-                        else => unreachable,
-                    }
-                },
-                else => unreachable,
-            }
+            dest.* = val.*;
 
             self.buildProcessList() catch {
                 return Error.BadProcessList;
@@ -201,22 +183,9 @@ pub fn Graph(comptime opts: Options) type {
 
             for (nodes, 0..) |*node, idx| {
                 for (node.ins()) |inlet| {
-                    switch (inlet) {
-                        .single => |single| {
-                            if (single.* == .handle) {
-                                const src_node_idx = single.handle.node_idx.?;
-                                adj[idx][src_node_idx] = true;
-                            }
-                        },
-                        .list => |list| {
-                            for (list.items) |i| {
-                                if (i == .handle) {
-                                    const src_node_idx = i.handle.node_idx.?;
-                                    adj[idx][src_node_idx] = true;
-                                }
-                            }
-                        },
-                        else => {},
+                    if (inlet.* == .handle) {
+                        const src_node_idx = inlet.handle.node_idx.?;
+                        adj[idx][src_node_idx] = true;
                     }
                 }
             }
@@ -308,12 +277,7 @@ pub fn Graph(comptime opts: Options) type {
                 if (should_print == true) {
                     const out = node.out(0);
 
-                    const out_val = switch (out) {
-                        .single => |val| val.*.get(),
-                        else => unreachable, // there shouldnt be any list-shaped outputs
-                    };
-
-                    std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out_val });
+                    std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out.get() });
                 }
             }
         }
@@ -367,7 +331,7 @@ pub fn Graph(comptime opts: Options) type {
                     .gen = ctx.scratch_gen[next_signal_spot],
                 } };
 
-                out.single.* = store_signal;
+                out.* = store_signal;
                 ctx.signal_count += 1;
             }
 
@@ -392,7 +356,7 @@ pub fn Graph(comptime opts: Options) type {
             if (getNode(ctx, hdl)) |node| {
                 for (node.outs()) |out| {
                     // increment gen on all signals for node
-                    switch (out.get(0).*) {
+                    switch (out.*) {
                         .handle => |out_hdl| {
                             ctx.scratch_gen[out_hdl.idx] += 1;
                             ctx.scratch_free_list.writeItem(out_hdl.idx) catch {
@@ -476,45 +440,19 @@ pub fn Graph(comptime opts: Options) type {
     };
 }
 
-// TODO: unsatisfied with this dynamically sized outlet list stuff.
-// Figure out alternative before it permeates through too much of the workings
-//
-//
-pub fn Portlet(T: type) type {
-    return union(enum) {
-        single: *T,
-        maybe: *?T,
-        list: *std.ArrayList(T),
-
-        const Self = @This();
-
-        pub fn get(s: Self, idx: ?usize) *T {
-            const n = idx orelse 0;
-            return switch (s) {
-                .single => |val| val,
-                // .maybe => |maybe_val| maybe_val,
-                .list => |list| &list.items[n],
-                else => unreachable, // TODO: sort out or remove "maybe" branch
-            };
-        }
-    };
-}
-
 pub const Node = struct {
     id: []const u8 = "x",
     num_inlets: u8 = undefined,
     num_outlets: u8 = undefined,
-    inlets: [MAX_PORT_COUNT]NodePortlet = undefined,
-    outlets: [MAX_PORT_COUNT]NodePortlet = undefined,
+    inlets: [MAX_PORT_COUNT]*Signal = undefined,
+    outlets: [MAX_PORT_COUNT]*Signal = undefined,
     ptr: *anyopaque,
     processFn: *const fn (*anyopaque) void,
-    portletFn: *const fn (*anyopaque, []const u8) NodePortlet,
-
-    const NodePortlet = Portlet(Signal);
+    portletFn: *const fn (*anyopaque, []const u8) *Signal,
 
     pub fn init(ptr: *anyopaque, T: type) Node {
         const concrete: *T = @ptrCast(@alignCast(ptr));
-        const P = Ports(T, Signal);
+        const P = Ports(T, *Signal);
         var node: Node = .{
             .ptr = ptr,
             .id = concrete.id,
@@ -528,8 +466,8 @@ pub const Node = struct {
         node.num_inlets = p_ins.len;
         node.num_outlets = p_outs.len;
 
-        std.mem.copyForwards(NodePortlet, node.inlets[0..], p_ins[0..]);
-        std.mem.copyForwards(NodePortlet, node.outlets[0..], p_outs[0..]);
+        std.mem.copyForwards(*Signal, node.inlets[0..], p_ins[0..]);
+        std.mem.copyForwards(*Signal, node.outlets[0..], p_outs[0..]);
 
         return node;
     }
@@ -538,25 +476,25 @@ pub const Node = struct {
         n.processFn(n.ptr);
     }
 
-    pub fn ins(n: Node) []const NodePortlet {
+    pub fn ins(n: Node) []const *Signal {
         return n.inlets[0..n.num_inlets];
     }
 
-    pub fn in(n: Node, idx: usize) NodePortlet {
+    pub fn in(n: Node, idx: usize) *Signal {
         // TODO: assert idx no greater than inlet count
         return n.inlets[idx];
     }
 
-    pub fn out(n: Node, idx: usize) NodePortlet {
+    pub fn out(n: Node, idx: usize) *Signal {
         // TODO: assert idx no greater than inlet count
         return n.outlets[idx];
     }
 
-    pub fn outs(n: Node) []const NodePortlet {
+    pub fn outs(n: Node) []const *Signal {
         return n.outlets[0..n.num_outlets];
     }
 
-    pub fn port(n: Node, field_name: []const u8) NodePortlet {
+    pub fn port(n: Node, field_name: []const u8) *Signal {
         return n.portletFn(n.ptr, field_name);
     }
 };
@@ -645,7 +583,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
 
         const Self = @This();
         const FE = std.meta.FieldEnum(T);
-        pub const L = Portlet(S);
+        pub const L = S;
 
         pub fn ins(ptr: *anyopaque) [T.ins.len]L {
             var t: *T = @ptrCast(@alignCast(ptr));
@@ -653,12 +591,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
 
             inline for (T.ins, 0..) |port, idx| {
                 const field_ptr = &@field(t, @tagName(port));
-                buf[idx] = switch (std.meta.FieldType(T, port)) {
-                    S => .{ .single = field_ptr },
-                    ?S => .{ .maybe = field_ptr },
-                    std.ArrayList(S) => .{ .list = field_ptr },
-                    else => unreachable,
-                };
+                buf[idx] = field_ptr;
             }
 
             return buf;
@@ -670,13 +603,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
 
             inline for (T.outs, 0..) |port, idx| {
                 const field_ptr = &@field(t, @tagName(port));
-                buf[idx] = switch (std.meta.FieldType(T, port)) {
-                    S => .{ .single = field_ptr },
-                    ?S => .{ .maybe = field_ptr },
-
-                    std.ArrayList(S) => .{ .list = field_ptr },
-                    else => unreachable,
-                };
+                buf[idx] = field_ptr;
             }
 
             return buf;
@@ -688,13 +615,7 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
             inline for (T.ins) |in| {
                 if (std.mem.eql(u8, @tagName(in), field_str)) {
                     const field_ptr = &@field(t, @tagName(in));
-
-                    return switch (std.meta.FieldType(T, in)) {
-                        S => .{ .single = field_ptr },
-                        ?S => .{ .maybe = field_ptr },
-                        std.ArrayList(S) => .{ .list = field_ptr },
-                        else => unreachable,
-                    };
+                    return field_ptr;
                 }
             }
 
@@ -702,15 +623,11 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
                 if (std.mem.eql(u8, @tagName(out), field_str)) {
                     const field_ptr = &@field(t, @tagName(out));
 
-                    return switch (std.meta.FieldType(T, out)) {
-                        S => .{ .single = field_ptr },
-                        ?S => .{ .maybe = field_ptr },
-                        std.ArrayList(S) => .{ .list = field_ptr },
-                        else => unreachable,
-                    };
+                    return field_ptr;
                 }
             }
 
+            std.debug.print("field_str: {s}\n", .{field_str});
             unreachable;
         }
 
