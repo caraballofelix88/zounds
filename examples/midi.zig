@@ -76,8 +76,6 @@ const PolySynth = struct {
                     s.active_notes.items(.osc)[purge_idx].?.*.amp = .{ .ptr = &s.active_notes.items(.amp)[purge_idx] };
                     s.active_notes.items(.osc)[purge_idx].?.*.out = .{ .ptr = &s.active_notes.items(.val)[purge_idx] };
                 }
-
-                std.debug.print("result: {}, active_notes: {}\n", .{ result, s.active_notes.len });
             } else {
                 purge_idx += 1;
             }

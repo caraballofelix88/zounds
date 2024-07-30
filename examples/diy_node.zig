@@ -30,10 +30,6 @@ const Wobble = struct {
 
         w.out.set(result);
     }
-
-    pub fn node(ptr: *Wobble) Node {
-        return Node.init(ptr, Wobble);
-    }
 };
 
 pub fn main() !void {

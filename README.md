@@ -4,7 +4,7 @@ A minimal(?) audio synthesis toolkit
 
 ## What does this thing do?
 
-It can help you play sounds, and some other stuff! It might not be very good at it, though.
+It can help you play sounds, and some other stuff! It might not be very good at it, though. Take a look at the examples for reference.
 
 - Real-time audio graph and signal synthesis (sort of)
 - MIDI Message parsing (sort of)
@@ -24,7 +24,7 @@ It can help you play sounds, and some other stuff! It might not be very good at 
 
 ## Goals
 
-Zounds was primarily an exploration in systems programming and DSP, and it has been a lovely learning experience. That said, the feature set is pretty handwavey and inconsistent as a result.
+Zounds was primarily an exploration in systems programming and DSP, and it has been a lovely learning experience. That said, the feature set is pretty handwave-y and inconsistent as a result.
 
 Zounds was initially designed to be something that could run on embedded hardware. Dynamic memory allocation has been kept to a minimum in generating audio node graphs, which allows for predictability in memory footprint. Expensive calculations (sinewaves and such) are computed at compile-time, and stored in lookup tables.
 

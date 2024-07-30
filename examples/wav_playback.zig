@@ -28,7 +28,7 @@ pub fn main() !void {
     _ = try graph_ctx.register(&filter_node);
 
     // file buffer
-    const file_buf = try zounds.readers.wav.readWavFile(alloc, "res/PinkPanther30.wav");
+    const file_buf = try zounds.readers.wav.readWavFile(alloc, "res/test.wav");
 
     var buffer_playback = zounds.dsp.BufferPlayback{ .ctx = graph_ctx, .buf = file_buf };
     var buf_node = buffer_playback.node();

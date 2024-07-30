@@ -129,7 +129,7 @@ pub fn readWavFile(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer 
 }
 
 test "readWavFile" {
-    const dir = "res/evil_laugh.wav";
+    const dir = "res/test.wav";
     const file = try readWavFile(testing.allocator, dir);
     defer testing.allocator.free(file.buf);
 
@@ -139,7 +139,7 @@ test "readWavFile" {
 }
 
 test "readWav" {
-    const dir = "res/evil_laugh.wav";
+    const dir = "res/test.wav";
     var file = try std.fs.cwd().openFile(dir, .{});
     defer file.close();
 
