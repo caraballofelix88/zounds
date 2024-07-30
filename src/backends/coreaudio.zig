@@ -6,7 +6,6 @@ const main = @import("../main.zig");
 const utils = @import("../utils.zig");
 const midi = @import("../midi.zig");
 const backends = @import("backends.zig");
-// shoutouts to my mans jamal for planting the seeds -- https://gist.github.com/jamal/8ee096ca98759f83b4942f22d365d449
 
 const DeviceState = enum {
     uninitialized,
@@ -21,7 +20,7 @@ const DeviceState = enum {
 pub const Context = struct {
     alloc: std.mem.Allocator,
     audioUnit: c.AudioUnit,
-    devices: std.ArrayList(main.Device),
+    devices: []main.Device,
     format: main.FormatData,
 
     pub fn init(allocator: std.mem.Allocator, config: main.ContextConfig) !backends.Context {
@@ -65,10 +64,12 @@ pub const Context = struct {
 
         const ctx = try allocator.create(Context);
 
+        const devices = try getOutputDevices(allocator);
+
         ctx.* = .{
             .alloc = allocator,
             .audioUnit = audioUnit,
-            .devices = undefined,
+            .devices = devices,
             // TODO: should use resolved device format instead of desired format
             .format = config.desired_format,
         };
@@ -79,10 +80,6 @@ pub const Context = struct {
     pub fn deinit(ctx: *Context) void {
         // TODO:
         _ = ctx;
-    }
-
-    pub fn devices(ctx: Context) []const main.Device {
-        return ctx.devices.items;
     }
 
     pub fn renderCallback(ref_ptr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.C) c.OSStatus {
@@ -142,6 +139,88 @@ pub const Context = struct {
         return .{ .coreaudio = player };
     }
 };
+
+fn getOutputDevices(alloc: std.mem.Allocator) ![]main.Device {
+    const device_property_address = c.AudioObjectPropertyAddress{
+        .mSelector = c.kAudioHardwarePropertyDevices,
+        .mScope = c.kAudioObjectPropertyScopeOutput,
+        .mElement = c.kAudioObjectPropertyElementMain,
+    };
+
+    var property_size: u32 = undefined;
+
+    osStatusHandler(c.AudioObjectGetPropertyDataSize(
+        c.kAudioObjectSystemObject,
+        &device_property_address,
+        0,
+        null,
+        &property_size,
+    )) catch |err| {
+        std.debug.print("error finding device count: {}\n", .{err});
+    };
+
+    const num_devices = property_size / @sizeOf(c.AudioDeviceID);
+    const device_ids: []c.AudioDeviceID = try alloc.alloc(c.AudioDeviceID, num_devices);
+
+    osStatusHandler(c.AudioObjectGetPropertyData(c.kAudioObjectSystemObject, &device_property_address, 0, null, &property_size, device_ids.ptr)) catch |err| {
+        std.debug.print("error getting device ids: {}\n", .{err});
+    };
+
+    var device_list = std.ArrayList(main.Device).init(alloc);
+
+    for (device_ids) |device_id| {
+
+        // pretty fuzzy on the exact nature of these addresses, but going off of
+        // https://gist.github.com/glaurent/b4e9a2a1bc5223977df428e03d465560
+        var property_address: c.AudioObjectPropertyAddress = .{
+            .mSelector = c.kAudioDevicePropertyDeviceName,
+            .mScope = c.kAudioObjectPropertyScopeGlobal,
+            .mElement = c.kAudioObjectPropertyElementMaster,
+        };
+        var p_size: u32 = @sizeOf([64]u8);
+
+        var device_name: [64]u8 = undefined;
+        var manufacturer_name: [64]u8 = undefined;
+
+        // device name
+        osStatusHandler(c.AudioObjectGetPropertyData(device_id, &property_address, 0, null, &p_size, &device_name)) catch |err| {
+            std.debug.print("Error getting device name: {}\n", .{err});
+        };
+
+        // manufacturer name
+        property_address.mSelector = c.kAudioDevicePropertyDeviceManufacturer;
+        osStatusHandler(c.AudioObjectGetPropertyData(device_id, &property_address, 0, null, &p_size, &manufacturer_name)) catch |err| {
+            std.debug.print("error getting manufacturer name for device {}: {}\n", .{ device_id, err });
+        };
+
+        // TODO: more properties
+        // channel layout: c.kAudioDevicePropertyPreferredChannelLayout
+        // sample rate: c.kAudioDevicePropertyAvailableNominalSampleRates
+        // sample formats, perhaps one of:
+        // - c.kAudioDevicePropertyStreamFormats
+        // - c.kAudioDevicePropertyStreamFormatSupported
+
+        std.debug.print("Device {}:\t{s}, {s}\n", .{ device_id, device_name, manufacturer_name });
+
+        const name = try std.fmt.allocPrint(
+            alloc,
+            "{s}, {s}",
+            .{ std.mem.trim(u8, &device_name, "\xaa"), std.mem.trim(u8, &manufacturer_name, "\xaa") },
+        );
+
+        const device: main.Device = .{
+            .id = &"NotReal".*,
+            .name = name,
+            .formats = &.{main.SampleFormat.f32},
+            .channels = main.ChannelPosition.fromChannelCount(2),
+            .sample_rate = 44_100,
+            .alloc = alloc,
+        };
+        try device_list.append(device);
+    }
+
+    return device_list.toOwnedSlice();
+}
 
 // Interface for playback actions
 pub const Player = struct {
@@ -223,7 +302,7 @@ fn osStatusHandler(result: c.OSStatus) !void {
             else => Error.GenericError,
         };
 
-        std.debug.print("OSStatus error:\t{}\n\n", .{out});
+        std.debug.print("OSStatus error:\t{}\nResult out:\t{}\n\n", .{ out, result });
 
         return out;
     }

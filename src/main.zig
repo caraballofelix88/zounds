@@ -173,6 +173,14 @@ pub const Device = struct {
     channels: []const ChannelPosition,
     sample_rate: u24,
     formats: []const SampleFormat,
+    alloc: ?std.mem.Allocator = null,
+
+    pub fn deinit(device: *Device) void {
+        if (device.alloc) |alloc| {
+            alloc.free(device.id);
+            alloc.free(device.name);
+        }
+    }
 };
 
 pub const StreamOptions = struct {

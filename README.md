@@ -1,6 +1,6 @@
 # Zounds
 
-A minimal(?) no-imports, low-footprint audio synthesis toolkit
+A minimal(?) zero-dependency, low-footprint audio synthesis toolkit
 
 ## What does this thing do?
 
