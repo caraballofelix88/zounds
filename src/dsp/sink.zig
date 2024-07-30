@@ -3,11 +3,11 @@ const signals = @import("../signals.zig");
 
 pub fn Sink(num_ins: u8) type {
     _ = num_ins; // autofix
-    // TODO: dynamic struct fields, based on inputs?
 
     return struct {
         ctx: signals.GraphContext,
         id: []const u8 = "Sink",
+        // TODO: dynamic struct fields, based on num_ins
         in_1: signals.Signal = .{ .static = 0.0 },
         in_2: signals.Signal = .{ .static = 0.0 },
         in_3: signals.Signal = .{ .static = 0.0 },

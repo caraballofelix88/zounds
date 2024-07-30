@@ -259,7 +259,7 @@ fn midiNotifyProc(notif: [*c]const c.MIDINotification, refCon: ?*anyopaque) call
 fn midiPacketReader(packets: [*c]const c.MIDIPacketList, read_proc_ref: ?*anyopaque, source_connect_ref: ?*anyopaque) callconv(.C) void {
     _ = source_connect_ref;
 
-    const cb_struct: *Midi.ClientCallbackStruct = @ptrCast(@alignCast(read_proc_ref));
+    const cb_struct: *midi.MessageCallbackStruct = @ptrCast(@alignCast(read_proc_ref));
     const cb: *const fn (*const midi.Message, *anyopaque) void = @ptrCast(@alignCast(cb_struct.cb));
 
     // NOTE: MIDIPacket within packet list needs to be pulled by memory address, not by array reference
@@ -335,86 +335,6 @@ fn getPropertiesString(buf: []u8, ref: c.MIDIObjectRef) void {
 }
 
 pub const Midi = struct {
-    pub const Device = struct {
-        alloc: std.mem.Allocator,
-
-        name: []u8,
-        id: []u8,
-        inputs: std.ArrayList(Endpoint) = undefined,
-        outputs: std.ArrayList(Endpoint) = undefined,
-
-        pub fn init(alloc: std.mem.Allocator, name: []const u8, id: []const u8) !Device {
-            const _name = try alloc.dupe(u8, name);
-            const _id = try alloc.dupe(u8, id);
-
-            return .{ .alloc = alloc, .name = _name, .id = _id };
-        }
-
-        pub fn deinit(d: Device) void {
-            d.alloc.free(d.name);
-            d.alloc.free(d.id);
-        }
-    };
-
-    // for OSX, represents MIDIEndpoints: Sources + num_destinations
-    pub const Endpoint = struct {
-        // Physical MIDI device
-        const Entity = struct {
-            name: []const u8,
-            id: i32,
-            is_embedded: bool,
-        };
-
-        alloc: std.mem.Allocator,
-        name: []const u8,
-        id: i32,
-        entity: ?Entity = null,
-        is_input: bool = false, // good enough!
-
-        pub fn init(
-            alloc: std.mem.Allocator,
-            name: []const u8,
-            id: i32,
-            is_input: bool,
-            entity: ?Entity,
-        ) !Endpoint {
-            // copy strings over
-            const _name = try alloc.dupe(u8, name);
-
-            var _entity: ?Entity = null;
-            if (entity) |e| {
-                const entity_name = try alloc.dupe(u8, e.name);
-                _entity = .{ .name = entity_name, .id = e.id, .is_embedded = e.is_embedded };
-            }
-
-            return .{
-                .alloc = alloc,
-                .name = _name,
-                .id = id,
-                .is_input = is_input,
-                .entity = _entity,
-            };
-        }
-
-        pub fn is_virtual(e: Endpoint) bool {
-            if (e.entity) {
-                return true;
-            }
-            return false;
-        }
-
-        pub fn deinit(e: *Endpoint) void {
-            e.alloc.free(e.name);
-
-            if (e.entity) |entity| {
-                e.alloc.free(entity.name);
-            }
-        }
-    };
-
-    // TODO: rename to clarify use as midi message capture callback
-    pub const ClientCallbackStruct = struct { ref: ?*anyopaque, cb: *const fn (*const midi.Message, *anyopaque) callconv(.C) void, mut: *std.Thread.Mutex };
-
     // Limiting to single input source for now
     pub const Client = struct {
         alloc: std.mem.Allocator,
@@ -426,19 +346,16 @@ pub const Midi = struct {
 
         id: u32,
         // TODO: add notification proc
-        available_devices: std.ArrayList(Device) = undefined,
-        available_inputs: std.ArrayList(Endpoint) = undefined,
-        available_outputs: std.ArrayList(Endpoint) = undefined,
+        available_devices: std.ArrayList(midi.Device) = undefined,
+        available_inputs: std.ArrayList(midi.Endpoint) = undefined,
+        available_outputs: std.ArrayList(midi.Endpoint) = undefined,
 
         active_input: u8 = undefined,
         active_output: u8 = undefined,
 
-        pub fn init(alloc: std.mem.Allocator, cb_struct: ?*const ClientCallbackStruct) !Client {
-            const name = try alloc.dupe(u8, &"Test".*);
-            const id = 12345;
-
-            const available_devices = std.ArrayList(Device).init(alloc);
-            var available_inputs = std.ArrayList(Endpoint).init(alloc);
+        pub fn init(alloc: std.mem.Allocator, cb_struct: ?*const midi.MessageCallbackStruct) !Client {
+            const available_devices = std.ArrayList(midi.Device).init(alloc);
+            var available_inputs = std.ArrayList(midi.Endpoint).init(alloc);
 
             const num_sources = c.MIDIGetNumberOfSources();
 
@@ -451,7 +368,7 @@ pub const Midi = struct {
 
             // initialize client input port
             var port_ref: c.MIDIPortRef = undefined;
-            // TODO: name designated here isn't reflected in other applications, wonder what's up w that<D-s>
+            // TODO: name designated here isn't reflected in other applications, wonder what's up w that
             const port_name = getStringRef("MIDI Input Port for Zounds");
             // InputPortCreate + MIDIReadProc should be deprecated in favor of MIDIInputPortCreateWithProtocol + midiReceiveBlock
             // zig C header translation doesn't yet support C block nodes, so it is what it is for now
@@ -475,25 +392,23 @@ pub const Midi = struct {
 
             return .{
                 .alloc = alloc,
-                .name = name,
+                .name = &"Test".*,
                 .available_devices = available_devices,
                 .available_inputs = available_inputs,
-                .id = id,
+                .id = 12345,
                 .ref = ref,
                 .input_port = port_ref,
             };
         }
 
         pub fn deinit(client: *Client) void {
-            for (client.available_devices.items) |device| {
+            for (client.available_devices.items) |*device| {
                 device.deinit();
             }
             client.available_devices.deinit();
 
-            for (client.available_inputs.items) |input| {
-                _ = input;
-                //TODO: handle deinit
-                //input.deinit();
+            for (client.available_inputs.items) |*input| {
+                input.deinit();
             }
             client.available_inputs.deinit();
 
@@ -502,10 +417,10 @@ pub const Midi = struct {
 
         // TODO: provide callback to connected port
         pub fn connectInputSource(client: *Client, index: u8) !void {
-            // if (client.active_input == index) {
-            //     std.debug.print("Already connected to input source {}.\n", .{index});
-            //     return;
-            // }
+            if (client.active_input == index) {
+                std.debug.print("Already connected to input source {}.\n", .{index});
+                return;
+            }
 
             var source: c.MIDIEndpointRef = undefined;
 
@@ -523,7 +438,7 @@ pub const Midi = struct {
         }
     };
 
-    fn createMidiSource(alloc: std.mem.Allocator, idx: usize) !Endpoint {
+    fn createMidiSource(alloc: std.mem.Allocator, idx: usize) !midi.Endpoint {
         const source: c.MIDIEndpointRef = c.MIDIGetSource(idx);
         var entity_ref: c.MIDIEntityRef = undefined;
 
@@ -548,7 +463,7 @@ pub const Midi = struct {
         var entity_name_buf: [64]u8 = undefined;
         var embedded: i32 = undefined;
 
-        var entity: ?Endpoint.Entity = null;
+        var entity: ?midi.Endpoint.Entity = null;
         if (!is_virtual) {
             const entity_name = try getStringProperty(&entity_name_buf, entity_ref, "name");
             getIntegerProperty(&entity_id, entity_ref, "uniqueID");
@@ -561,7 +476,7 @@ pub const Midi = struct {
             };
         }
 
-        return Endpoint.init(
+        return midi.Endpoint.init(
             alloc,
             name,
             source_id,
@@ -570,7 +485,7 @@ pub const Midi = struct {
         );
     }
 
-    fn createMidiDevice(alloc: std.mem.Allocator, idx: usize) !Device {
+    fn createMidiDevice(alloc: std.mem.Allocator, idx: usize) !midi.Device {
         var name_buf: [64]u8 = undefined;
         var id: i32 = undefined;
         const device_ref: c.MIDIDeviceRef = c.MIDIGetDevice(idx);
@@ -583,7 +498,7 @@ pub const Midi = struct {
         var id_str: [32]u8 = undefined;
         _ = std.fmt.formatIntBuf(&id_str, id, 10, .lower, .{});
         std.debug.print("creating midi device {}:\n", .{idx});
-        const device = try Device.init(alloc, &name, &id_str);
+        const device = try midi.Device.init(alloc, &name, &id_str);
 
         return device;
     }

@@ -186,7 +186,7 @@ pub fn main() !void {
     var midi_msg_queue: std.fifo.LinearFifo(zounds.midi.Message, .Dynamic) = std.fifo.LinearFifo(zounds.midi.Message, .Dynamic).init(alloc);
 
     // TODO: split out midi backends
-    const on_update_struct = zounds.coreaudio.Midi.ClientCallbackStruct{ .cb = &midiCallback, .ref = @ptrCast(@constCast(&midi_msg_queue)), .mut = &midi_queue_mutex };
+    const on_update_struct = zounds.midi.ClientCallbackStruct{ .cb = &midiCallback, .ref = @ptrCast(@constCast(&midi_msg_queue)), .mut = &midi_queue_mutex };
 
     var midi_client = try zounds.coreaudio.Midi.Client.init(alloc, &on_update_struct);
     defer midi_client.deinit();

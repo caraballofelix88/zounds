@@ -134,3 +134,82 @@ test "Message" {
     const running_msg = try Message.fromBytes(&.{ 0x44, 0x29 }, running_status);
     try testing.expectEqual(.note_on, running_msg.status.kind());
 }
+
+pub const Device = struct {
+    alloc: std.mem.Allocator,
+
+    name: []u8,
+    id: []u8,
+    inputs: std.ArrayList(Endpoint) = undefined,
+    outputs: std.ArrayList(Endpoint) = undefined,
+
+    pub fn init(alloc: std.mem.Allocator, name: []const u8, id: []const u8) !Device {
+        const _name = try alloc.dupe(u8, name);
+        const _id = try alloc.dupe(u8, id);
+
+        return .{ .alloc = alloc, .name = _name, .id = _id };
+    }
+
+    pub fn deinit(d: Device) void {
+        d.alloc.free(d.name);
+        d.alloc.free(d.id);
+    }
+};
+
+// for OSX, represents MIDIEndpoints: Sources + num_destinations
+pub const Endpoint = struct {
+    // Physical MIDI device
+    pub const Entity = struct {
+        name: []const u8,
+        id: i32,
+        is_embedded: bool,
+    };
+
+    alloc: std.mem.Allocator,
+    name: []const u8,
+    id: i32,
+    entity: ?Entity = null,
+    is_input: bool = false, // good enough!
+
+    pub fn init(
+        alloc: std.mem.Allocator,
+        name: []const u8,
+        id: i32,
+        is_input: bool,
+        entity: ?Entity,
+    ) !Endpoint {
+        // copy strings over
+        const _name = try alloc.dupe(u8, name);
+
+        var _entity: ?Entity = null;
+        if (entity) |e| {
+            const entity_name = try alloc.dupe(u8, e.name);
+            _entity = .{ .name = entity_name, .id = e.id, .is_embedded = e.is_embedded };
+        }
+
+        return .{
+            .alloc = alloc,
+            .name = _name,
+            .id = id,
+            .is_input = is_input,
+            .entity = _entity,
+        };
+    }
+
+    pub fn is_virtual(e: Endpoint) bool {
+        if (e.entity) {
+            return true;
+        }
+        return false;
+    }
+
+    pub fn deinit(e: *Endpoint) void {
+        e.alloc.free(e.name);
+
+        if (e.entity) |entity| {
+            e.alloc.free(entity.name);
+        }
+    }
+};
+
+pub const MessageCallbackStruct = struct { ref: ?*anyopaque, cb: *const fn (*const Message, *anyopaque) callconv(.C) void, mut: *std.Thread.Mutex };

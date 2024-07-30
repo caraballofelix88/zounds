@@ -111,7 +111,7 @@ pub const Options = struct {
     scratch_size: u16 = SCRATCH_SIZE,
     channel_count: u8 = 2,
 };
-// TODO: contexts as nodes themselves?
+
 pub fn Graph(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
