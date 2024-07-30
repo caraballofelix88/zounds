@@ -1,10 +1,12 @@
 # Zounds
 
-A minimal(?) audio synthesis toolkit
+A minimal(?) no-imports, low-footprint audio synthesis toolkit
 
 ## What does this thing do?
 
-It can help you play sounds, and some other stuff! It might not be very good at it, though. Take a look at the examples for reference.
+It can help you play sounds, and some other stuff! Take a look at the examples for reference.
+
+Zounds is very much a work in progress, and is primarily an educational exercise; don't expect anything crazy rock-solid just yet.
 
 - Real-time audio graph and signal synthesis (sort of)
 - MIDI Message parsing (sort of)
@@ -30,6 +32,4 @@ Zounds was initially designed to be something that could run on embedded hardwar
 
 Extensibility of the Zounds audio graph module is also an ongoing focus.
 
-Zounds was also pretty much written exclusively for my use and education; don't expect any rock solid performance out of this, and for all I know this could brick your PC.
-
-Further documentation TK.
+### Further documentation TK

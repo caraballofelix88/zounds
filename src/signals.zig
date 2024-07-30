@@ -112,6 +112,8 @@ pub const Options = struct {
     channel_count: u8 = 2,
 };
 
+// TODO: could be broken up
+// free-list/gen array could be its own little data structure
 pub fn Graph(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
