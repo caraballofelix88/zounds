@@ -9,7 +9,6 @@ const SCRATCH_SIZE = 1024;
 const MAX_PORT_COUNT = 8;
 const CHANNEL_COUNT = 2;
 
-// TODO: handles prolly just need const pointers to an extant context, not a new object every time
 pub const HandleTag = enum { node, signal };
 pub const Handle = struct {
     tag: HandleTag,
@@ -43,10 +42,12 @@ pub const GraphContext = struct {
         connect: *const fn (*anyopaque, *Signal, *Signal) Error!void,
         next: *const fn (*anyopaque) []f32, // how to push multi-channel?
 
+        getNodeList: *const fn (*anyopaque) []Node,
         getSignal: *const fn (*anyopaque, Handle) f32,
         getSignalSource: *const fn (*anyopaque, Handle) ?*Node,
         setSignal: *const fn (*anyopaque, Handle, f32) void,
         getNode: *const fn (*anyopaque, Handle) ?*Node,
+        root: *const fn (*anyopaque) *Signal,
 
         ticks: *const fn (*anyopaque) u64,
         node_gen: *const fn (*anyopaque) []u8,
@@ -77,6 +78,10 @@ pub const GraphContext = struct {
         return self.vtable.next(self.ptr);
     }
 
+    pub inline fn getNodeList(self: GraphContext) []Node {
+        return self.vtable.getNodeList(self.ptr);
+    }
+
     pub inline fn getSignal(self: GraphContext, hdl: Handle) f32 {
         return self.vtable.getSignal(self.ptr, hdl);
     }
@@ -85,6 +90,7 @@ pub const GraphContext = struct {
         self.vtable.setSignal(self.ptr, hdl, val);
     }
 
+    // TODO: drop this
     pub inline fn getSignalSource(self: GraphContext, hdl: Handle) ?*Node {
         return self.vtable.getSignalSource(self.ptr, hdl);
     }
@@ -104,6 +110,10 @@ pub const GraphContext = struct {
     pub inline fn signal_gen(self: GraphContext) []u8 {
         return self.vtable.signal_gen(self.ptr);
     }
+
+    pub inline fn root(self: GraphContext) *Signal {
+        return self.vtable.root(self.ptr);
+    }
 };
 
 pub const Options = struct {
@@ -114,6 +124,7 @@ pub const Options = struct {
 
 // TODO: could be broken up
 // free-list/gen array could be its own little data structure
+// TODO: instead of a freelist, we could also just track "alive" flags on each element of our node_store
 pub fn Graph(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
@@ -146,6 +157,7 @@ pub fn Graph(comptime opts: Options) type {
             return self.scratch_gen[0..];
         }
 
+        // could probably return a pointer instead of a new struct every time
         pub fn context(self: *Self) GraphContext {
             return .{
                 .ptr = self,
@@ -157,6 +169,7 @@ pub fn Graph(comptime opts: Options) type {
                     .deregister = deregister,
                     .connect = connect,
                     .next = next,
+                    .getNodeList = getNodeList,
                     .getSignal = getSignal,
                     .getSignalSource = getSignalSource,
                     .setSignal = setSignal,
@@ -164,11 +177,12 @@ pub fn Graph(comptime opts: Options) type {
                     .ticks = ticks,
                     .node_gen = node_gen,
                     .signal_gen = signal_gen,
+                    .root = root,
                 },
             };
         }
 
-        // TODO: fix repeated connects to dynamic length ports
+        // TODO: use handles instead of signal ptrs
         pub fn connect(ptr: *anyopaque, dest: *Signal, val: *Signal) !void {
             const self: *Self = @ptrCast(@alignCast(ptr));
             dest.* = val.*;
@@ -319,10 +333,12 @@ pub fn Graph(comptime opts: Options) type {
 
             const next_node_spot = ctx.node_free_list.readItem() orelse ctx.node_count;
             ctx.node_store[next_node_spot] = node;
+
+            // TODO: if pulling from freelist, will not be correct
             ctx.node_count += 1;
 
             // reasigns node outsignals after slotting space for them in memeory
-            for (node.outs()) |out| {
+            for (ctx.node_store[next_node_spot].outs()) |out| {
                 const next_signal_spot = ctx.scratch_free_list.readItem() orelse ctx.signal_count;
 
                 const store_signal: Signal = .{ .handle = .{
@@ -334,6 +350,8 @@ pub fn Graph(comptime opts: Options) type {
                 } };
 
                 out.* = store_signal;
+
+                // TODO: breaks if we pull from freelist?
                 ctx.signal_count += 1;
             }
 
@@ -378,6 +396,11 @@ pub fn Graph(comptime opts: Options) type {
             ctx.buildProcessList() catch {
                 return error.BadProcessList;
             };
+        }
+
+        fn getNodeList(ptr: *anyopaque) []Node {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+            return ctx.node_store[0..ctx.node_count];
         }
 
         fn getHandleVal(ptr: *anyopaque, idx: usize, gen: u8) f32 {
@@ -439,9 +462,17 @@ pub fn Graph(comptime opts: Options) type {
 
             return &ctx.node_store[hdl.idx];
         }
+
+        fn root(ptr: *anyopaque) *Signal {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+            return &ctx.root_signal;
+        }
     };
 }
 
+// TODO: revisit
+// Do we need this array space to keep track of signal ptrs?
+// How do we track signal field names? we need to pass that along
 pub const Node = struct {
     id: []const u8 = "x",
     num_inlets: u8 = undefined,
@@ -454,7 +485,7 @@ pub const Node = struct {
 
     pub fn init(ptr: *anyopaque, T: type) Node {
         const concrete: *T = @ptrCast(@alignCast(ptr));
-        const P = Ports(T, *Signal);
+        const P = Ports(T, Signal);
         var node: Node = .{
             .ptr = ptr,
             .id = concrete.id,
@@ -474,29 +505,29 @@ pub const Node = struct {
         return node;
     }
 
-    pub fn process(n: Node) void {
+    pub fn process(n: *const Node) void {
         n.processFn(n.ptr);
     }
 
-    pub fn ins(n: Node) []const *Signal {
+    pub fn ins(n: *const Node) []const *Signal {
         return n.inlets[0..n.num_inlets];
     }
 
-    pub fn in(n: Node, idx: usize) *Signal {
+    pub fn in(n: *const Node, idx: usize) *Signal {
         // TODO: assert idx no greater than inlet count
         return n.inlets[idx];
     }
 
-    pub fn out(n: Node, idx: usize) *Signal {
+    pub fn out(n: *const Node, idx: usize) *Signal {
         // TODO: assert idx no greater than inlet count
         return n.outlets[idx];
     }
 
-    pub fn outs(n: Node) []const *Signal {
+    pub fn outs(n: *const Node) []const *Signal {
         return n.outlets[0..n.num_outlets];
     }
 
-    pub fn port(n: Node, field_name: []const u8) *Signal {
+    pub fn port(n: *const Node, field_name: []const u8) *Signal {
         return n.portletFn(n.ptr, field_name);
     }
 };
@@ -587,31 +618,29 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
         const FE = std.meta.FieldEnum(T);
         pub const L = S;
 
-        pub fn ins(ptr: *anyopaque) [T.ins.len]L {
+        pub fn ins(ptr: *anyopaque) [T.ins.len]*L {
             var t: *T = @ptrCast(@alignCast(ptr));
-            var buf: [T.ins.len]L = undefined;
+            var buf: [T.ins.len]*L = undefined;
 
-            inline for (T.ins, 0..) |port, idx| {
-                const field_ptr = &@field(t, @tagName(port));
-                buf[idx] = field_ptr;
+            inline for (T.ins, 0..T.ins.len) |port, idx| {
+                buf[idx] = &@field(t, @tagName(port));
             }
 
             return buf;
         }
 
-        pub fn outs(ptr: *anyopaque) [T.outs.len]L {
+        pub fn outs(ptr: *anyopaque) [T.outs.len]*L {
             var t: *T = @ptrCast(@alignCast(ptr));
-            var buf: [T.outs.len]L = undefined;
+            var buf: [T.outs.len]*L = undefined;
 
-            inline for (T.outs, 0..) |port, idx| {
-                const field_ptr = &@field(t, @tagName(port));
-                buf[idx] = field_ptr;
+            inline for (T.outs, 0..T.outs.len) |port, idx| {
+                buf[idx] = &@field(t, @tagName(port));
             }
 
             return buf;
         }
 
-        pub fn get(ptr: *anyopaque, field_str: []const u8) L {
+        pub fn get(ptr: *anyopaque, field_str: []const u8) *L {
             const t: *T = @ptrCast(@alignCast(ptr));
 
             inline for (T.ins) |in| {
@@ -624,7 +653,6 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
             inline for (T.outs) |out| {
                 if (std.mem.eql(u8, @tagName(out), field_str)) {
                     const field_ptr = &@field(t, @tagName(out));
-
                     return field_ptr;
                 }
             }
@@ -666,7 +694,7 @@ test "Ports" {
     };
     var node = PortNode{};
 
-    const P = Ports(PortNode, []const u8);
+    const P = Ports(PortNode, *[]const u8);
 
     // TODO: this could use more tests
     // getPtr
@@ -674,4 +702,6 @@ test "Ports" {
     try testing.expectEqual(&node.out_back, P.getPtr(&node, .out_back));
     try testing.expectEqual(@TypeOf(P.getPtr(&node, .steak_house)), *f32);
     try testing.expectEqual(&node.steak_house, P.getPtr(&node, .steak_house));
+
+    try testing.expectEqual(.{&node.out_back}, P.outs(&node));
 }

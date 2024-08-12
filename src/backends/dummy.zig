@@ -79,7 +79,7 @@ pub const Player = struct {
         p.is_paused = false;
     }
 
-    pub fn pause(p: *Player) !void {
+    pub fn pause(p: *Player) void {
         p.is_paused = true;
     }
 

@@ -66,7 +66,7 @@ pub const Player = struct {
 
     pub inline fn pause(p: Player) void {
         return switch (p.backend) {
-            inline else => |b| b.play(),
+            inline else => |b| b.pause(),
         };
     }
 
