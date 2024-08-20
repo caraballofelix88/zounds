@@ -13,19 +13,7 @@ pub const HandleTag = enum { node, signal };
 pub const Handle = struct {
     tag: HandleTag,
     idx: u16,
-    node_idx: ?u16 = null, // bookkeeping for signal source nodes
-    ctx: GraphContext,
-    gen: u8 = 0,
-
-    pub inline fn valid(hdl: Handle) bool {
-        // this switch could live inside the context as some get_gen() func, prolly
-        const gen_slice = switch (hdl.tag) {
-            .node => hdl.ctx.node_gen(),
-            .signal => hdl.ctx.signal_gen(),
-        };
-
-        return gen_slice[hdl.idx] <= hdl.gen;
-    }
+    gen: u8,
 };
 
 pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList, NodeGraphCycleDetected };
@@ -37,24 +25,23 @@ pub const GraphContext = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        register: *const fn (*anyopaque, Node) Error!*Node,
+        register: *const fn (*anyopaque, Node) Error!Handle,
         deregister: *const fn (*anyopaque, Handle) Error!void,
         connect: *const fn (*anyopaque, *Signal, *Signal) Error!void,
         next: *const fn (*anyopaque) []f32, // how to push multi-channel?
 
         getNodeList: *const fn (*anyopaque) []Node,
         getSignal: *const fn (*anyopaque, Handle) f32,
-        getSignalSource: *const fn (*anyopaque, Handle) ?*Node,
         setSignal: *const fn (*anyopaque, Handle, f32) void,
         getNode: *const fn (*anyopaque, Handle) ?*Node,
-        root: *const fn (*anyopaque) *Signal,
 
+        root: *const fn (*anyopaque) *Signal,
         ticks: *const fn (*anyopaque) u64,
         node_gen: *const fn (*anyopaque) []u8,
         signal_gen: *const fn (*anyopaque) []u8,
     };
 
-    pub fn register(self: GraphContext, node_ptr: anytype) !*Node {
+    pub fn register(self: GraphContext, node_ptr: anytype) !Handle {
         const T = @typeInfo(@TypeOf(node_ptr));
         std.debug.assert(T == .Pointer);
 
@@ -90,11 +77,6 @@ pub const GraphContext = struct {
         self.vtable.setSignal(self.ptr, hdl, val);
     }
 
-    // TODO: drop this
-    pub inline fn getSignalSource(self: GraphContext, hdl: Handle) ?*Node {
-        return self.vtable.getSignalSource(self.ptr, hdl);
-    }
-
     pub inline fn getNode(self: GraphContext, hdl: Handle) ?*Node {
         return self.vtable.getNode(self.ptr, hdl);
     }
@@ -124,12 +106,13 @@ pub const Options = struct {
 
 // TODO: could be broken up
 // free-list/gen array could be its own little data structure
-// TODO: instead of a freelist, we could also just track "alive" flags on each element of our node_store
+// TODO: instead of just(?) a freelist, we could also just track "alive" flags on each element of our node_store, to ensure the data is available during iteration
 pub fn Graph(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
         scratch_gen: [opts.scratch_size]u8 = std.mem.zeroes([opts.scratch_size]u8),
         scratch_free_list: std.fifo.LinearFifo(u16, .{ .Static = opts.scratch_size }) = std.fifo.LinearFifo(u16, .{ .Static = opts.scratch_size }).init(),
+        scratch_source_map: [opts.scratch_size]u16 = std.mem.zeroes([opts.scratch_size]u16),
         node_store: [opts.max_node_count]Node = undefined,
         node_gen: [opts.max_node_count]u8 = std.mem.zeroes([opts.max_node_count]u8),
         node_free_list: std.fifo.LinearFifo(u16, .{ .Static = opts.max_node_count }) = std.fifo.LinearFifo(u16, .{ .Static = opts.max_node_count }).init(),
@@ -145,18 +128,6 @@ pub fn Graph(comptime opts: Options) type {
 
         pub const Self = @This();
 
-        pub fn node_gen(ptr: *anyopaque) []u8 {
-            const self: *Self = @ptrCast(@alignCast(ptr));
-
-            return self.node_gen[0..];
-        }
-
-        pub fn signal_gen(ptr: *anyopaque) []u8 {
-            const self: *Self = @ptrCast(@alignCast(ptr));
-
-            return self.scratch_gen[0..];
-        }
-
         // could probably return a pointer instead of a new struct every time
         pub fn context(self: *Self) GraphContext {
             return .{
@@ -171,7 +142,6 @@ pub fn Graph(comptime opts: Options) type {
                     .next = next,
                     .getNodeList = getNodeList,
                     .getSignal = getSignal,
-                    .getSignalSource = getSignalSource,
                     .setSignal = setSignal,
                     .getNode = getNode,
                     .ticks = ticks,
@@ -182,12 +152,15 @@ pub fn Graph(comptime opts: Options) type {
             };
         }
 
-        // TODO: use handles instead of signal ptrs
+        // TODO: consider better ergonomics for connecting signals.
+        // maybe signal.connect(other signal)? That's how WebAudio does it
+        //
         pub fn connect(ptr: *anyopaque, dest: *Signal, val: *Signal) !void {
-            const self: *Self = @ptrCast(@alignCast(ptr));
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+
             dest.* = val.*;
 
-            self.buildProcessList() catch {
+            ctx.buildProcessList() catch {
                 return Error.BadProcessList;
             };
         }
@@ -200,7 +173,7 @@ pub fn Graph(comptime opts: Options) type {
             for (nodes, 0..) |*node, idx| {
                 for (node.ins()) |inlet| {
                     if (inlet.* == .handle) {
-                        const src_node_idx = inlet.handle.node_idx.?;
+                        const src_node_idx = inlet.handle.src_node_hdl.?.idx;
                         adj[idx][src_node_idx] = true;
                     }
                 }
@@ -316,15 +289,8 @@ pub fn Graph(comptime opts: Options) type {
             return ctx.sink[0..];
         }
 
-        pub fn ticks(ptr: *anyopaque) u64 {
-            const self: *Self = @ptrCast(@alignCast(ptr));
-
-            return self.ticks;
-        }
-
-        // TODO: variable size outs
         // Reserves space for node and processing output in context
-        pub fn register(ptr: *anyopaque, node: Node) !*Node {
+        pub fn register(ptr: *anyopaque, node: Node) !Handle {
             var ctx: *Self = @ptrCast(@alignCast(ptr));
 
             if (ctx.node_count >= opts.max_node_count) {
@@ -332,21 +298,32 @@ pub fn Graph(comptime opts: Options) type {
             }
 
             const next_node_spot = ctx.node_free_list.readItem() orelse ctx.node_count;
-            ctx.node_store[next_node_spot] = node;
+            const next_node = &ctx.node_store[next_node_spot];
+
+            next_node.* = node;
 
             // TODO: if pulling from freelist, will not be correct
             ctx.node_count += 1;
 
+            const node_handle = .{
+                .tag = .node,
+                .idx = next_node_spot,
+                .gen = ctx.node_gen[next_node_spot],
+            };
+
             // reasigns node outsignals after slotting space for them in memeory
-            for (ctx.node_store[next_node_spot].outs()) |out| {
+            for (next_node.outs()) |out| {
                 const next_signal_spot = ctx.scratch_free_list.readItem() orelse ctx.signal_count;
+                ctx.scratch_source_map[next_signal_spot] = next_node_spot;
 
                 const store_signal: Signal = .{ .handle = .{
-                    .node_idx = next_node_spot,
-                    .idx = next_signal_spot,
+                    .src_node_hdl = node_handle,
+                    .hdl = .{
+                        .idx = next_signal_spot,
+                        .gen = ctx.scratch_gen[next_signal_spot],
+                        .tag = .signal,
+                    },
                     .ctx = ctx.context(),
-                    .tag = .signal,
-                    .gen = ctx.scratch_gen[next_signal_spot],
                 } };
 
                 out.* = store_signal;
@@ -360,10 +337,7 @@ pub fn Graph(comptime opts: Options) type {
                 return Error.BadProcessList;
             };
 
-            const node_handle = .{ .ctx = ctx.context(), .idx = next_node_spot, .gen = ctx.node_gen[next_node_spot], .tag = .node };
-            _ = node_handle; // autofix
-
-            return &ctx.node_store[next_node_spot];
+            return node_handle;
         }
 
         pub fn deregister(ptr: *anyopaque, hdl: Handle) !void {
@@ -378,8 +352,8 @@ pub fn Graph(comptime opts: Options) type {
                     // increment gen on all signals for node
                     switch (out.*) {
                         .handle => |out_hdl| {
-                            ctx.scratch_gen[out_hdl.idx] += 1;
-                            ctx.scratch_free_list.writeItem(out_hdl.idx) catch {
+                            ctx.scratch_gen[out_hdl.hdl.idx] += 1;
+                            ctx.scratch_free_list.writeItem(out_hdl.hdl.idx) catch {
                                 return Error.OtherError;
                             };
                         },
@@ -403,69 +377,99 @@ pub fn Graph(comptime opts: Options) type {
             return ctx.node_store[0..ctx.node_count];
         }
 
-        fn getHandleVal(ptr: *anyopaque, idx: usize, gen: u8) f32 {
-            const ctx: *Self = @ptrCast(@alignCast(ptr));
-
-            if (ctx.scratch_gen[idx] == gen) {
-                return ctx.scratch[idx];
-            }
-
-            return 0.0;
-        }
-
-        fn setHandleVal(ptr: *anyopaque, idx: usize, val: f32) void {
-            var ctx: *Self = @ptrCast(@alignCast(ptr));
-            ctx.scratch[idx] = val;
-        }
-
-        fn getHandleSource(ptr: *anyopaque, idx: usize) *Node {
-            var ctx: *Self = @ptrCast(@alignCast(ptr));
-            return @constCast(&ctx.node_store[idx]);
-        }
-
         fn getSignal(ptr: *anyopaque, hdl: Handle) f32 {
-            if (hdl.tag != .signal or !hdl.valid()) {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+            if (hdl.tag != .signal or !ctx.isValidHandle(hdl)) {
                 return 0.0;
             }
-            const ctx: *Self = @ptrCast(@alignCast(ptr));
 
             return ctx.scratch[hdl.idx];
         }
 
-        fn getSignalSource(ptr: *anyopaque, hdl: Handle) ?*Node {
-            if (hdl.tag != .signal or !hdl.valid()) {
-                return null;
-            }
-
+        fn setSignal(ptr: *anyopaque, hdl: Handle, val: f32) void {
             const ctx: *Self = @ptrCast(@alignCast(ptr));
-
-            return &ctx.node_store[hdl.node_idx.?];
-        }
-
-        pub fn setSignal(ptr: *anyopaque, hdl: Handle, val: f32) void {
-            if (hdl.tag != .signal or !hdl.valid()) {
+            if (hdl.tag != .signal or !ctx.isValidHandle(hdl)) {
                 return;
             }
-
-            const ctx: *Self = @ptrCast(@alignCast(ptr));
 
             ctx.scratch[hdl.idx] = val;
         }
 
+        fn getSignalSource(ptr: *anyopaque, hdl: Handle) ?*Node {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+            if (hdl.tag != .signal or !ctx.isValidHandle(hdl)) {
+                return null;
+            }
+
+            const source_idx = ctx.scratch_source_map[hdl.idx];
+            return &ctx.node_store[source_idx];
+        }
+
+        fn getSignalPtr(ctx: *Self, hdl: Handle) !*Signal {
+            if (hdl.tag != .signal or !ctx.isValidHandle(hdl)) {
+                return Error.OtherError;
+            }
+
+            // iterate through ports on node till we find the right one, i guess?
+            if (getSignalSource(ctx, hdl)) |src_node| {
+                for (src_node.ins()) |in| {
+                    if (in.*.handle.hdl.idx == hdl.idx) {
+                        return in;
+                    }
+                }
+
+                for (src_node.outs()) |out| {
+                    if (out.*.handle.hdl.idx == hdl.idx) {
+                        return out;
+                    }
+                }
+            }
+
+            return Error.OtherError;
+        }
+
         fn getNode(ptr: *anyopaque, hdl: Handle) ?*Node {
-            if (hdl.tag != .node or !hdl.valid()) {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+            if (!ctx.isValidHandle(hdl)) {
                 std.debug.print("null node: {}\n\n", .{hdl});
                 return null;
             }
 
-            const ctx: *Self = @ptrCast(@alignCast(ptr));
+            return switch (hdl.tag) {
+                .node => &ctx.node_store[hdl.idx],
+                .signal => getSignalSource(ctx, hdl),
+            };
+        }
 
-            return &ctx.node_store[hdl.idx];
+        inline fn isValidHandle(self: *const Self, hdl: Handle) bool {
+            const gen_slice = switch (hdl.tag) {
+                .node => self.node_gen[0..self.node_count],
+                .signal => self.scratch_gen[0..self.signal_count],
+            };
+
+            return gen_slice[hdl.idx] <= hdl.gen;
+        }
+
+        fn ticks(ptr: *anyopaque) u64 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            return self.ticks;
         }
 
         fn root(ptr: *anyopaque) *Signal {
             const ctx: *Self = @ptrCast(@alignCast(ptr));
             return &ctx.root_signal;
+        }
+
+        fn node_gen(ptr: *anyopaque) []u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+
+            return self.node_gen[0..];
+        }
+
+        fn signal_gen(ptr: *anyopaque) []u8 {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+
+            return self.scratch_gen[0..];
         }
     };
 }
@@ -559,15 +563,24 @@ pub fn TestSignal(comptime dir: SignalDirection, comptime ValueType: type) type 
 // type_tag: type enum, dictates shape of value
 // SignalValue(T): dictates source of signal, effectively the stuff below
 //
+
 pub const Signal = union(enum) {
     ptr: *f32,
-    handle: Handle,
+    // NOTE: to be provided by signal graph context, don't assign otherwise
+    handle: SignalHandle, // TODO: rename, overloads the meaning of "handle"
     static: f32,
+
+    // TODO: remove altogether?
+    pub const SignalHandle = struct {
+        hdl: Handle,
+        src_node_hdl: ?Handle = null,
+        ctx: GraphContext, // TODO: limit to ptr
+    };
 
     pub fn get(s: Signal) f32 {
         return switch (s) {
             .ptr => |ptr| ptr.*,
-            .handle => |handle| handle.ctx.getSignal(handle),
+            .handle => |handle| handle.ctx.getSignal(handle.hdl),
             .static => |val| val,
         };
     }
@@ -578,7 +591,7 @@ pub const Signal = union(enum) {
                 ptr.* = v;
             },
             .handle => |handle| {
-                handle.ctx.setSignal(handle, v);
+                handle.ctx.setSignal(handle.hdl, v);
             },
             .static => {
                 return;
@@ -589,7 +602,7 @@ pub const Signal = union(enum) {
     pub fn source(s: Signal) ?*Node {
         return switch (s) {
             .ptr => null,
-            .handle => |handle| handle.ctx.getHandleSource(handle.idx),
+            .handle => |handle| handle.ctx.getNode(handle.hdl),
             .static => null,
         };
     }

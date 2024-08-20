@@ -24,7 +24,8 @@ pub fn main() !void {
     // build trigger for chord envelope
     var trigger: f32 = 0.0;
     var adsr = zounds.dsp.ADSR{ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
-    var adsr_node = try graph_ctx.register(&adsr);
+    const adsr_hdl = try graph_ctx.register(&adsr);
+    var adsr_node = graph_ctx.getNode(adsr_hdl).?;
 
     var osc_c = zounds.dsp.Oscillator{
         .ctx = graph_ctx,
@@ -49,15 +50,19 @@ pub fn main() !void {
 
     var chord = zounds.dsp.Sink(3){ .ctx = graph_ctx };
 
-    var chord_node = try graph_ctx.register(&chord);
+    const chord_hdl = try graph_ctx.register(&chord);
+    var chord_node = graph_ctx.getNode(chord_hdl).?;
 
     // plug adsr into oscillators, plug oscillators into chord
-    const note_nodes: []const *Node = &.{ c_node, e_node, g_node };
-    for (note_nodes, 0..) |note, idx| {
+    const note_hdls: []const zounds.signals.Handle = &.{ c_node, e_node, g_node };
+    for (note_hdls, 0..) |hdl, idx| {
         var field_name_buf: [32]u8 = undefined;
+
+        var note_node = graph_ctx.getNode(hdl).?;
+
         const field_str = try std.fmt.bufPrint(&field_name_buf, "in_{}", .{idx + 1});
-        try graph_ctx.connect(chord_node.port(field_str), note.port("out"));
-        try graph_ctx.connect(note.port("amp"), adsr_node.port("out"));
+        try graph_ctx.connect(chord_node.port(field_str), note_node.port("out"));
+        try graph_ctx.connect(note_node.port("amp"), adsr_node.port("out"));
     }
 
     // assign root signal to signal graph
