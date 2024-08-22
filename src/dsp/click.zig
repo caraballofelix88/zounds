@@ -4,7 +4,7 @@ const clock = @import("../clock.zig");
 const wavegen = @import("../wavegen.zig");
 
 pub const Click = struct {
-    ctx: signals.GraphContext,
+    ctx: *const signals.GraphContext,
     id: []const u8 = "click",
     bpm: signals.Signal = .{ .static = 120.0 },
 

@@ -2,7 +2,7 @@ const std = @import("std");
 const signals = @import("../signals.zig");
 
 pub const LFO = struct {
-    ctx: signals.GraphContext,
+    ctx: *const signals.GraphContext,
     id: []const u8 = "wobb",
     base_pitch: signals.Signal = .{ .static = 440.0 },
     frequency: signals.Signal = .{ .static = 10.0 },

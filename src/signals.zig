@@ -33,7 +33,11 @@ pub const GraphContext = struct {
         getNodeList: *const fn (*anyopaque) []Node,
         getSignal: *const fn (*anyopaque, Handle) f32,
         setSignal: *const fn (*anyopaque, Handle, f32) void,
+        getSignalPtr: *const fn (*anyopaque, Handle) ?*Signal,
+
         getNode: *const fn (*anyopaque, Handle) ?*Node,
+        getNodeHandle: *const fn (*anyopaque, Node) ?Handle,
+        getSignalSourceHandle: *const fn (*anyopaque, Handle) ?Handle,
 
         root: *const fn (*anyopaque) *Signal,
         ticks: *const fn (*anyopaque) u64,
@@ -41,7 +45,7 @@ pub const GraphContext = struct {
         signal_gen: *const fn (*anyopaque) []u8,
     };
 
-    pub fn register(self: GraphContext, node_ptr: anytype) !Handle {
+    pub fn register(self: *const GraphContext, node_ptr: anytype) !Handle {
         const T = @typeInfo(@TypeOf(node_ptr));
         std.debug.assert(T == .Pointer);
 
@@ -53,47 +57,59 @@ pub const GraphContext = struct {
         return try self.vtable.register(self.ptr, node);
     }
 
-    pub fn deregister(self: GraphContext, hdl: Handle) !void {
+    pub fn deregister(self: *const GraphContext, hdl: Handle) !void {
         try self.vtable.deregister(self.ptr, hdl);
     }
 
-    pub fn connect(self: GraphContext, dest: *Signal, val: *Signal) !void {
+    pub fn connect(self: *const GraphContext, dest: *Signal, val: *Signal) !void {
         try self.vtable.connect(self.ptr, dest, val);
     }
 
-    pub fn next(self: GraphContext) []f32 {
+    pub fn next(self: *const GraphContext) []f32 {
         return self.vtable.next(self.ptr);
     }
 
-    pub inline fn getNodeList(self: GraphContext) []Node {
+    pub inline fn getNodeList(self: *const GraphContext) []Node {
         return self.vtable.getNodeList(self.ptr);
     }
 
-    pub inline fn getSignal(self: GraphContext, hdl: Handle) f32 {
+    pub inline fn getSignal(self: *const GraphContext, hdl: Handle) f32 {
         return self.vtable.getSignal(self.ptr, hdl);
     }
 
-    pub inline fn setSignal(self: GraphContext, hdl: Handle, val: f32) void {
+    pub inline fn getSignalPtr(self: *const GraphContext, hdl: Handle) ?*Signal {
+        return self.vtable.getSignalPtr(self.ptr, hdl);
+    }
+
+    pub inline fn setSignal(self: *const GraphContext, hdl: Handle, val: f32) void {
         self.vtable.setSignal(self.ptr, hdl, val);
     }
 
-    pub inline fn getNode(self: GraphContext, hdl: Handle) ?*Node {
+    pub inline fn getSignalSourceHandle(self: *const GraphContext, hdl: Handle) ?Handle {
+        return self.vtable.getSignalSourceHandle(self.ptr, hdl);
+    }
+
+    pub inline fn getNode(self: *const GraphContext, hdl: Handle) ?*Node {
         return self.vtable.getNode(self.ptr, hdl);
     }
 
-    pub inline fn ticks(self: GraphContext) u64 {
+    pub inline fn getNodeHandle(self: *const GraphContext, node: Node) ?Handle {
+        return self.vtable.getNodeHandle(self.ptr, node);
+    }
+
+    pub inline fn ticks(self: *const GraphContext) u64 {
         return self.vtable.ticks(self.ptr);
     }
 
-    pub inline fn node_gen(self: GraphContext) []u8 {
+    pub inline fn node_gen(self: *const GraphContext) []u8 {
         return self.vtable.node_gen(self.ptr);
     }
 
-    pub inline fn signal_gen(self: GraphContext) []u8 {
+    pub inline fn signal_gen(self: *const GraphContext) []u8 {
         return self.vtable.signal_gen(self.ptr);
     }
 
-    pub inline fn root(self: GraphContext) *Signal {
+    pub inline fn root(self: *const GraphContext) *Signal {
         return self.vtable.root(self.ptr);
     }
 };
@@ -123,33 +139,40 @@ pub fn Graph(comptime opts: Options) type {
         node_count: u16 = 0,
         signal_count: u16 = 0,
 
+        ctx: ?GraphContext = null,
+
         // Holds the last sample frame
         sink: [opts.channel_count]f32 = undefined,
 
         pub const Self = @This();
 
-        // could probably return a pointer instead of a new struct every time
-        pub fn context(self: *Self) GraphContext {
-            return .{
-                .ptr = self,
-                .opts = opts,
-                .sample_rate = self.format.sample_rate,
-                .inv_sample_rate = self.format.invSampleRate(),
-                .vtable = &.{
-                    .register = register,
-                    .deregister = deregister,
-                    .connect = connect,
-                    .next = next,
-                    .getNodeList = getNodeList,
-                    .getSignal = getSignal,
-                    .setSignal = setSignal,
-                    .getNode = getNode,
-                    .ticks = ticks,
-                    .node_gen = node_gen,
-                    .signal_gen = signal_gen,
-                    .root = root,
-                },
-            };
+        pub fn context(self: *Self) *const GraphContext {
+            if (self.ctx == null) {
+                self.ctx = .{
+                    .ptr = self,
+                    .opts = opts,
+                    .sample_rate = self.format.sample_rate,
+                    .inv_sample_rate = self.format.invSampleRate(),
+                    .vtable = &.{
+                        .register = register,
+                        .deregister = deregister,
+                        .connect = connect,
+                        .next = next,
+                        .getNodeList = getNodeList,
+                        .getSignal = getSignal,
+                        .getSignalPtr = getSignalPtr,
+                        .setSignal = setSignal,
+                        .getNode = getNode,
+                        .getNodeHandle = getNodeHandle,
+                        .getSignalSourceHandle = getSignalSourceHandle,
+                        .ticks = ticks,
+                        .node_gen = node_gen,
+                        .signal_gen = signal_gen,
+                        .root = root,
+                    },
+                };
+            }
+            return &self.ctx.?;
         }
 
         // TODO: consider better ergonomics for connecting signals.
@@ -167,13 +190,14 @@ pub fn Graph(comptime opts: Options) type {
 
         pub const AdjMatrix = [opts.max_node_count][opts.max_node_count]bool;
 
-        fn getAdjMatrix(nodes: []Node) AdjMatrix {
+        fn getAdjMatrix(ctx: *Self) AdjMatrix {
+            const nodes = ctx.node_store[0..];
             var adj: AdjMatrix = undefined;
 
             for (nodes, 0..) |*node, idx| {
                 for (node.ins()) |inlet| {
                     if (inlet.* == .handle) {
-                        const src_node_idx = inlet.handle.src_node_hdl.?.idx;
+                        const src_node_idx = ctx.scratch_source_map[inlet.handle.hdl.idx];
                         adj[idx][src_node_idx] = true;
                     }
                 }
@@ -217,7 +241,7 @@ pub fn Graph(comptime opts: Options) type {
         pub fn buildProcessList(ctx: *Self) !void {
             const NodeWithIndex = struct { node: *Node, idx: u8 };
             var queue = std.fifo.LinearFifo(NodeWithIndex, .{ .Static = opts.max_node_count }).init();
-            var adj_matrix: AdjMatrix = getAdjMatrix(ctx.node_store[0..]);
+            var adj_matrix: AdjMatrix = ctx.getAdjMatrix();
             var processed_nodes: u8 = 0;
 
             for (0..ctx.node_count) |idx| {
@@ -317,7 +341,6 @@ pub fn Graph(comptime opts: Options) type {
                 ctx.scratch_source_map[next_signal_spot] = next_node_spot;
 
                 const store_signal: Signal = .{ .handle = .{
-                    .src_node_hdl = node_handle,
                     .hdl = .{
                         .idx = next_signal_spot,
                         .gen = ctx.scratch_gen[next_signal_spot],
@@ -405,27 +428,64 @@ pub fn Graph(comptime opts: Options) type {
             return &ctx.node_store[source_idx];
         }
 
-        fn getSignalPtr(ctx: *Self, hdl: Handle) !*Signal {
+        fn getSignalSourceHandle(ptr: *anyopaque, hdl: Handle) ?Handle {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
             if (hdl.tag != .signal or !ctx.isValidHandle(hdl)) {
-                return Error.OtherError;
+                return null;
+            }
+
+            const node_idx = ctx.scratch_source_map[hdl.idx];
+            return .{
+                .idx = node_idx,
+                .gen = ctx.node_gen[node_idx],
+                .tag = .node,
+            };
+        }
+
+        fn getNodeHandle(ptr: *anyopaque, node: Node) ?Handle {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+
+            // identify node by its ptr field, not perfect but will do for now
+            for (ctx.node_store, 0..) |n, idx| {
+                if (node.ptr == n.ptr) {
+                    return .{
+                        .idx = @as(u16, @truncate(idx)),
+                        .gen = ctx.node_gen[idx],
+                        .tag = .node,
+                    };
+                }
+            }
+
+            return null;
+        }
+
+        fn getSignalPtr(ptr: *anyopaque, hdl: Handle) ?*Signal {
+            const ctx: *Self = @ptrCast(@alignCast(ptr));
+
+            if (hdl.tag != .signal or !ctx.isValidHandle(hdl)) {
+                return null;
             }
 
             // iterate through ports on node till we find the right one, i guess?
             if (getSignalSource(ctx, hdl)) |src_node| {
                 for (src_node.ins()) |in| {
-                    if (in.*.handle.hdl.idx == hdl.idx) {
-                        return in;
+                    if (in.* == .handle) {
+                        if (in.*.handle.hdl.idx == hdl.idx) {
+                            return in;
+                        }
                     }
                 }
 
                 for (src_node.outs()) |out| {
-                    if (out.*.handle.hdl.idx == hdl.idx) {
-                        return out;
+                    if (out.* == .handle) {
+                        if (out.*.handle.hdl.idx == hdl.idx) {
+                            return out;
+                        }
                     }
                 }
             }
 
-            return Error.OtherError;
+            return null;
         }
 
         fn getNode(ptr: *anyopaque, hdl: Handle) ?*Node {
@@ -567,15 +627,8 @@ pub fn TestSignal(comptime dir: SignalDirection, comptime ValueType: type) type 
 pub const Signal = union(enum) {
     ptr: *f32,
     // NOTE: to be provided by signal graph context, don't assign otherwise
-    handle: SignalHandle, // TODO: rename, overloads the meaning of "handle"
+    handle: struct { hdl: Handle, ctx: *const GraphContext },
     static: f32,
-
-    // TODO: remove altogether?
-    pub const SignalHandle = struct {
-        hdl: Handle,
-        src_node_hdl: ?Handle = null,
-        ctx: GraphContext, // TODO: limit to ptr
-    };
 
     pub fn get(s: Signal) f32 {
         return switch (s) {
@@ -599,10 +652,10 @@ pub const Signal = union(enum) {
         }
     }
 
-    pub fn source(s: Signal) ?*Node {
+    pub fn source(s: Signal) ?Handle {
         return switch (s) {
             .ptr => null,
-            .handle => |handle| handle.ctx.getNode(handle.hdl),
+            .handle => |handle| handle.ctx.getSignalSourceHandle(handle.hdl),
             .static => null,
         };
     }

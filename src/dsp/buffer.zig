@@ -3,7 +3,7 @@ const signals = @import("../signals.zig");
 const main = @import("../main.zig");
 
 pub const BufferPlayback = struct {
-    ctx: signals.GraphContext,
+    ctx: *const signals.GraphContext,
     id: []const u8 = "BufferPlayback",
     head: usize = 0,
     head_inc_counter: usize = 0,

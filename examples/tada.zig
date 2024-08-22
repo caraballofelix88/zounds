@@ -69,7 +69,7 @@ pub fn main() !void {
     signal_graph.root_signal = chord_node.port("out").*;
 
     // TODO: audio context should derive its sample rate from available backend devices/formats, not the raw desired config
-    var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
+    var player_ctx = try zounds.Context.init(null, alloc, config);
 
     const device: zounds.Device = .{
         .sample_rate = 44_100,
@@ -80,7 +80,7 @@ pub fn main() !void {
     };
 
     const options: zounds.StreamOptions = .{
-        .write_ref = &graph_ctx,
+        .write_ref = @ptrCast(@constCast(graph_ctx)),
         .format = config.desired_format,
     };
 

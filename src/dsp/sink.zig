@@ -5,7 +5,7 @@ pub fn Sink(num_ins: u8) type {
     _ = num_ins; // autofix
 
     return struct {
-        ctx: signals.GraphContext,
+        ctx: *const signals.GraphContext,
         id: []const u8 = "Sink",
         // TODO: dynamic struct fields, based on num_ins
         in_1: signals.Signal = .{ .static = 0.0 },

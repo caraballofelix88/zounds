@@ -8,7 +8,7 @@ pub const ADSR = struct {
 
     const Self = @This();
 
-    ctx: signals.GraphContext,
+    ctx: *const signals.GraphContext,
     id: []const u8 = "adsr",
     state: Self.State = .off,
     trigger: signals.Signal = .{ .static = 0.0 },

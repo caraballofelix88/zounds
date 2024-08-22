@@ -54,7 +54,7 @@ pub fn getFilterCoefficients(filter_type: FilterType, sample_freq: u32, cutoff_f
 
 // Recursive biquad filter
 pub const Filter = struct {
-    ctx: signals.GraphContext,
+    ctx: *const signals.GraphContext,
     id: []const u8 = "Filter",
     in: signals.Signal = .{ .static = 0.0 },
     out: signals.Signal = .{ .static = 0.0 },

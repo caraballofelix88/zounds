@@ -26,6 +26,19 @@ pub const Context = struct {
                 ).Pointer.child.init(allocator, config);
             }
             // TODO: iterate through list of available backends if not specified
+            else {
+                inline for (std.meta.fields(Backend), 0..) |b, i| {
+                    if (@typeInfo(
+                        std.meta.fieldInfo(backends.Context, @as(Backend, @enumFromInt(b.value))).type,
+                    ).Pointer.child.init(allocator, config)) |d| {
+                        break :blk d;
+                    } else |err| {
+                        if (i == std.meta.fields(Backend).len - 1)
+                            return err;
+                    }
+                }
+                unreachable;
+            }
         };
 
         return .{

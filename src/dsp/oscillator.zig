@@ -3,7 +3,7 @@ const signals = @import("../signals.zig");
 const wavegen = @import("../wavegen.zig");
 
 pub const Oscillator = struct {
-    ctx: signals.GraphContext,
+    ctx: *const signals.GraphContext,
     id: []const u8 = "oscillator",
     wavetable: []const f32 = &wavegen.sine_wave,
     pitch: signals.Signal = .{ .static = 440.0 },
