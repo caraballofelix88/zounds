@@ -8,6 +8,7 @@ const MAX_NODE_COUNT = 64;
 const SCRATCH_SIZE = 1024;
 const MAX_PORT_COUNT = 8;
 const CHANNEL_COUNT = 2;
+const PORT_ID_NAME_SIZE = 64;
 
 pub const HandleTag = enum { node, signal };
 pub const Handle = struct {
@@ -195,9 +196,9 @@ pub fn Graph(comptime opts: Options) type {
             var adj: AdjMatrix = undefined;
 
             for (nodes, 0..) |*node, idx| {
-                for (node.ins()) |inlet| {
-                    if (inlet.* == .handle) {
-                        const src_node_idx = ctx.scratch_source_map[inlet.handle.hdl.idx];
+                for (node.ins()) |in| {
+                    if (in.val.* == .handle) {
+                        const src_node_idx = ctx.scratch_source_map[in.val.*.handle.hdl.idx];
                         adj[idx][src_node_idx] = true;
                     }
                 }
@@ -290,7 +291,7 @@ pub fn Graph(comptime opts: Options) type {
                 if (should_print == true) {
                     const out = node.out(0);
 
-                    std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out.get() });
+                    std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out.val.get() });
                 }
             }
         }
@@ -349,7 +350,7 @@ pub fn Graph(comptime opts: Options) type {
                     .ctx = ctx.context(),
                 } };
 
-                out.* = store_signal;
+                out.val.* = store_signal;
 
                 // TODO: breaks if we pull from freelist?
                 ctx.signal_count += 1;
@@ -373,7 +374,7 @@ pub fn Graph(comptime opts: Options) type {
             if (getNode(ctx, hdl)) |node| {
                 for (node.outs()) |out| {
                     // increment gen on all signals for node
-                    switch (out.*) {
+                    switch (out.val.*) {
                         .handle => |out_hdl| {
                             ctx.scratch_gen[out_hdl.hdl.idx] += 1;
                             ctx.scratch_free_list.writeItem(out_hdl.hdl.idx) catch {
@@ -469,17 +470,17 @@ pub fn Graph(comptime opts: Options) type {
             // iterate through ports on node till we find the right one, i guess?
             if (getSignalSource(ctx, hdl)) |src_node| {
                 for (src_node.ins()) |in| {
-                    if (in.* == .handle) {
-                        if (in.*.handle.hdl.idx == hdl.idx) {
-                            return in;
+                    if (in.val.* == .handle) {
+                        if (in.val.*.handle.hdl.idx == hdl.idx) {
+                            return in.val;
                         }
                     }
                 }
 
                 for (src_node.outs()) |out| {
-                    if (out.* == .handle) {
-                        if (out.*.handle.hdl.idx == hdl.idx) {
-                            return out;
+                    if (out.val.* == .handle) {
+                        if (out.val.*.handle.hdl.idx == hdl.idx) {
+                            return out.val;
                         }
                     }
                 }
@@ -541,15 +542,15 @@ pub const Node = struct {
     id: []const u8 = "x",
     num_inlets: u8 = undefined,
     num_outlets: u8 = undefined,
-    inlets: [MAX_PORT_COUNT]*Signal = undefined,
-    outlets: [MAX_PORT_COUNT]*Signal = undefined,
+    inlets: [MAX_PORT_COUNT]PortField = undefined,
+    outlets: [MAX_PORT_COUNT]PortField = undefined,
     ptr: *anyopaque,
     processFn: *const fn (*anyopaque) void,
-    portletFn: *const fn (*anyopaque, []const u8) *Signal,
+    portletFn: *const fn (*anyopaque, []const u8) PortField,
 
     pub fn init(ptr: *anyopaque, T: type) Node {
         const concrete: *T = @ptrCast(@alignCast(ptr));
-        const P = Ports(T, Signal);
+        const P = Ports(T);
         var node: Node = .{
             .ptr = ptr,
             .id = concrete.id,
@@ -563,8 +564,8 @@ pub const Node = struct {
         node.num_inlets = p_ins.len;
         node.num_outlets = p_outs.len;
 
-        std.mem.copyForwards(*Signal, node.inlets[0..], p_ins[0..]);
-        std.mem.copyForwards(*Signal, node.outlets[0..], p_outs[0..]);
+        std.mem.copyForwards(PortField, node.inlets[0..], p_ins[0..]);
+        std.mem.copyForwards(PortField, node.outlets[0..], p_outs[0..]);
 
         return node;
     }
@@ -573,25 +574,25 @@ pub const Node = struct {
         n.processFn(n.ptr);
     }
 
-    pub fn ins(n: *const Node) []const *Signal {
+    pub fn ins(n: *const Node) []const PortField {
         return n.inlets[0..n.num_inlets];
     }
 
-    pub fn in(n: *const Node, idx: usize) *Signal {
+    pub fn in(n: *const Node, idx: usize) PortField {
         // TODO: assert idx no greater than inlet count
         return n.inlets[idx];
     }
 
-    pub fn out(n: *const Node, idx: usize) *Signal {
+    pub fn out(n: *const Node, idx: usize) PortField {
         // TODO: assert idx no greater than inlet count
         return n.outlets[idx];
     }
 
-    pub fn outs(n: *const Node) []const *Signal {
+    pub fn outs(n: *const Node) []const PortField {
         return n.outlets[0..n.num_outlets];
     }
 
-    pub fn port(n: *const Node, field_name: []const u8) *Signal {
+    pub fn port(n: *const Node, field_name: []const u8) PortField {
         return n.portletFn(n.ptr, field_name);
     }
 };
@@ -663,8 +664,13 @@ pub const Signal = union(enum) {
 
 // https://zigbin.io/9222cb
 // shoutouts to Francis on the forums
+pub const PortField = struct {
+    val: *Signal,
+    name: []const u8,
+    default_val: Signal,
+};
 
-pub fn Ports(comptime T: anytype, comptime S: anytype) type {
+pub fn Ports(comptime T: anytype) type {
     // Serves as an interface to a concrete class's input and output.
     // Upstream types must designate which fields are input and output data through
     // FieldEnum arrays.
@@ -682,48 +688,71 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
 
         const Self = @This();
         const FE = std.meta.FieldEnum(T);
-        pub const L = S;
 
-        pub fn ins(ptr: *anyopaque) [T.ins.len]*L {
-            var t: *T = @ptrCast(@alignCast(ptr));
-            var buf: [T.ins.len]*L = undefined;
+        const default_signal: Signal = .{ .static = 0.0 };
+
+        pub fn ins(ptr: *anyopaque) [T.ins.len]PortField {
+            const t: *T = @ptrCast(@alignCast(ptr));
+            var buf: [T.ins.len]PortField = undefined;
 
             inline for (T.ins, 0..T.ins.len) |port, idx| {
-                buf[idx] = &@field(t, @tagName(port));
+                const info = std.meta.fieldInfo(T, port);
+                const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                buf[idx] = .{
+                    .val = &@field(t, @tagName(port)),
+                    .name = info.name,
+                    .default_val = default_val.*,
+                };
             }
 
             return buf;
         }
 
-        pub fn outs(ptr: *anyopaque) [T.outs.len]*L {
+        pub fn outs(ptr: *anyopaque) [T.outs.len]PortField {
             var t: *T = @ptrCast(@alignCast(ptr));
-            var buf: [T.outs.len]*L = undefined;
+            var buf: [T.outs.len]PortField = undefined;
 
             inline for (T.outs, 0..T.outs.len) |port, idx| {
-                buf[idx] = &@field(t, @tagName(port));
+                const info = std.meta.fieldInfo(T, port);
+                const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+
+                buf[idx] = .{
+                    .val = &@field(t, @tagName(port)),
+                    .name = info.name,
+                    .default_val = default_val.*,
+                };
             }
 
             return buf;
         }
 
-        pub fn get(ptr: *anyopaque, field_str: []const u8) *L {
+        pub fn get(ptr: *anyopaque, field_str: []const u8) PortField {
             const t: *T = @ptrCast(@alignCast(ptr));
 
             inline for (T.ins) |in| {
                 if (std.mem.eql(u8, @tagName(in), field_str)) {
-                    const field_ptr = &@field(t, @tagName(in));
-                    return field_ptr;
+                    const info = std.meta.fieldInfo(T, in);
+                    const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                    return .{
+                        .val = &@field(t, @tagName(in)),
+                        .name = info.name,
+                        .default_val = default_val.*,
+                    };
                 }
             }
 
             inline for (T.outs) |out| {
                 if (std.mem.eql(u8, @tagName(out), field_str)) {
-                    const field_ptr = &@field(t, @tagName(out));
-                    return field_ptr;
+                    const info = std.meta.fieldInfo(T, out);
+                    const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                    return .{
+                        .val = &@field(t, @tagName(out)),
+                        .name = info.name,
+                        .default_val = default_val.*,
+                    };
                 }
             }
 
-            std.debug.print("field_str: {s}\n", .{field_str});
             unreachable;
         }
 
@@ -744,30 +773,4 @@ pub fn Ports(comptime T: anytype, comptime S: anytype) type {
             return &@field(t, @tagName(fe));
         }
     };
-}
-
-test "Ports" {
-    const PortNode = struct {
-        in_one: []const u8 = "1",
-        in_two: []const u8 = "2",
-        in_three: []const u8 = "3",
-        drive_in: []const u8 = "no",
-        out_back: []const u8 = "yes",
-        steak_house: f32 = 9999.0,
-
-        pub const ins = [_]std.meta.FieldEnum(@This()){ .in_one, .in_two, .in_three };
-        pub const outs = [_]std.meta.FieldEnum(@This()){.out_back};
-    };
-    var node = PortNode{};
-
-    const P = Ports(PortNode, *[]const u8);
-
-    // TODO: this could use more tests
-    // getPtr
-    try testing.expectEqual(@TypeOf(P.getPtr(&node, .out_back)), *[]const u8);
-    try testing.expectEqual(&node.out_back, P.getPtr(&node, .out_back));
-    try testing.expectEqual(@TypeOf(P.getPtr(&node, .steak_house)), *f32);
-    try testing.expectEqual(&node.steak_house, P.getPtr(&node, .steak_house));
-
-    try testing.expectEqual(.{&node.out_back}, P.outs(&node));
 }
