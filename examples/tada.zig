@@ -105,7 +105,7 @@ pub fn main() !void {
     std.debug.print("-dah~\n", .{});
     std.time.sleep(std.time.ns_per_ms * 3000);
 
-    std.debug.print("ctx ticks:\t{}\n", .{graph_ctx.ticks()});
+    std.log.debug("ctx ticks:\t{}\n", .{graph_ctx.ticks()});
 }
 
 pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {

@@ -4,14 +4,16 @@ const testing = std.testing;
 const main = @import("main.zig");
 const dsp = @import("dsp/dsp.zig");
 
+const log = std.log.scoped(.signals);
+
 const MAX_NODE_COUNT = 64;
 const SCRATCH_SIZE = 1024;
 const MAX_PORT_COUNT = 8;
 const CHANNEL_COUNT = 2;
 const PORT_ID_NAME_SIZE = 64;
 
-pub const HandleTag = enum { node, signal };
-pub const Handle = struct {
+pub const HandleTag = enum(u8) { node, signal };
+pub const Handle = extern struct {
     tag: HandleTag,
     idx: u16,
     gen: u8,
@@ -48,7 +50,7 @@ pub const GraphContext = struct {
 
     pub fn register(self: *const GraphContext, node_ptr: anytype) !Handle {
         const T = @typeInfo(@TypeOf(node_ptr));
-        std.debug.assert(T == .Pointer);
+        // std.debug.assert(T == .Pointer);
 
         // TODO: assert type has process function with compatible signature
         const ChildType = T.Pointer.child;
@@ -191,9 +193,9 @@ pub fn Graph(comptime opts: Options) type {
 
         pub const AdjMatrix = [opts.max_node_count][opts.max_node_count]bool;
 
-        fn getAdjMatrix(ctx: *Self) AdjMatrix {
+        pub fn getAdjMatrix(ctx: *Self) AdjMatrix {
             const nodes = ctx.node_store[0..];
-            var adj: AdjMatrix = undefined;
+            var adj: AdjMatrix = std.mem.zeroes(AdjMatrix);
 
             for (nodes, 0..) |*node, idx| {
                 for (node.ins()) |in| {
@@ -228,12 +230,12 @@ pub fn Graph(comptime opts: Options) type {
         }
 
         fn printList(matrix: AdjMatrix, n: u8) void {
-            std.debug.print("List:\n\n", .{});
+            log.debug("List:\n\n", .{});
 
             for (matrix[0..n]) |row| {
-                std.debug.print("{any}\n", .{row[0..n]});
+                log.debug("{any}\n", .{row[0..n]});
             }
-            std.debug.print("\n", .{});
+            log.debug("\n", .{});
         }
 
         // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
@@ -267,19 +269,19 @@ pub fn Graph(comptime opts: Options) type {
             }
 
             if (processed_nodes < ctx.node_count) {
-                std.debug.print("uh oh, somethings up. Likely cycle found.\n", .{});
-                std.debug.print("node count: {}\tprocessed nodes:{}\n", .{ ctx.node_count, processed_nodes });
+                log.debug("uh oh, somethings up. Likely cycle found.\n", .{});
+                log.debug("node count: {}\tprocessed nodes:{}\n", .{ ctx.node_count, processed_nodes });
                 return Error.BadProcessList;
             }
         }
 
         pub fn printNodeList(ctx: *Self) void {
-            std.debug.print("node list:\t", .{});
+            log.debug("node list:\t", .{});
             for (0..ctx.node_count) |idx| {
                 const n = ctx.node_process_list[idx];
-                std.debug.print("{s}, ", .{n.id});
+                log.debug("{s}, ", .{n.id});
             }
-            std.debug.print("\n", .{});
+            log.debug("\n", .{});
         }
 
         pub fn process(ptr: *anyopaque, should_print: bool) void {
@@ -291,7 +293,7 @@ pub fn Graph(comptime opts: Options) type {
                 if (should_print == true) {
                     const out = node.out(0);
 
-                    std.debug.print("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out.val.get() });
+                    log.debug("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out.val.get() });
                 }
             }
         }
@@ -492,7 +494,7 @@ pub fn Graph(comptime opts: Options) type {
         fn getNode(ptr: *anyopaque, hdl: Handle) ?*Node {
             const ctx: *Self = @ptrCast(@alignCast(ptr));
             if (!ctx.isValidHandle(hdl)) {
-                std.debug.print("null node: {}\n\n", .{hdl});
+                log.debug("null node: {}\n\n", .{hdl});
                 return null;
             }
 
@@ -630,10 +632,11 @@ pub const Signal = union(enum) {
     // NOTE: to be provided by signal graph context, don't assign otherwise
     handle: struct { hdl: Handle, ctx: *const GraphContext },
     static: f32,
+    vol: *volatile f32,
 
     pub fn get(s: Signal) f32 {
         return switch (s) {
-            .ptr => |ptr| ptr.*,
+            .ptr, .vol => |ptr| ptr.*,
             .handle => |handle| handle.ctx.getSignal(handle.hdl),
             .static => |val| val,
         };
@@ -641,7 +644,7 @@ pub const Signal = union(enum) {
 
     pub fn set(s: Signal, v: f32) void {
         switch (s) {
-            .ptr => |ptr| {
+            .ptr, .vol => |ptr| {
                 ptr.* = v;
             },
             .handle => |handle| {
@@ -655,7 +658,7 @@ pub const Signal = union(enum) {
 
     pub fn source(s: Signal) ?Handle {
         return switch (s) {
-            .ptr => null,
+            .ptr, .vol => null,
             .handle => |handle| handle.ctx.getSignalSourceHandle(handle.hdl),
             .static => null,
         };

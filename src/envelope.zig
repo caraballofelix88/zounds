@@ -184,6 +184,8 @@ pub const adsr: [4]Ramp = .{
 };
 
 pub const ADSRConfig = struct {
+    amplitude: f32 = 1.0,
+    sample_rate: u32 = 44_100,
     attack_duration: Duration = .{ .seconds = 0.05 },
     decay_duration: Duration = .{ .seconds = 0.2 },
     sustain_duration: Duration = .{ .seconds = 1 },
@@ -193,31 +195,31 @@ pub fn generateADSR(config: ADSRConfig) [4]Ramp {
     return .{
         .{ // attack
             .from = 0.0,
-            .to = 1.0,
+            .to = config.amplitude,
             .ramp_type = .linear,
-            .sample_rate = 44_100,
+            .sample_rate = config.sample_rate,
             .duration = config.attack_duration,
         },
         .{ // decay
-            .from = 1.0,
-            .to = 0.7,
+            .from = config.amplitude,
+            .to = 0.7 * config.amplitude,
             .ramp_type = .linear,
-            .sample_rate = 44_100,
+            .sample_rate = config.sample_rate,
             .duration = config.decay_duration,
         },
         .{ // sustain
-            .from = 0.7,
-            .to = 0.5,
+            .from = 0.7 * config.amplitude,
+            .to = 0.5 * config.amplitude,
             .ramp_type = .linear,
-            .sample_rate = 44_100,
+            .sample_rate = config.sample_rate,
             .duration = config.sustain_duration,
         },
 
         .{ // release
-            .from = 0.5,
+            .from = 0.5 * config.amplitude,
             .to = 0.0,
             .ramp_type = .linear,
-            .sample_rate = 44_100,
+            .sample_rate = config.sample_rate,
             .duration = config.release_duration,
         },
     };

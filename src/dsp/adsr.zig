@@ -27,6 +27,7 @@ pub const ADSR = struct {
         var adsr: *Self = @ptrCast(@alignCast(ptr));
 
         // update state
+        // _ = std.c.printf("trigger in sample:\t%f\t", adsr.trigger.get());
         if (adsr.trigger.get() > adsr.prev_trigger) {
             adsr.state = .attack;
             adsr.attack_ts = adsr.ctx.ticks();
@@ -41,9 +42,10 @@ pub const ADSR = struct {
             adsr.hold_duration = 0;
         }
 
-        if (@intFromEnum(adsr.state) > 0 and adsr.prev_val <= epsilon) {
+        if (adsr.state != .attack and adsr.state != .off and adsr.prev_val <= epsilon) {
             adsr.state = .off;
             adsr.prev_val = 0.0;
+            adsr.prev_trigger = adsr.trigger.get();
             adsr.out.set(0.0);
         }
 
@@ -54,7 +56,7 @@ pub const ADSR = struct {
         var curr_ramp = adsr.ramps[@intFromEnum(adsr.state)];
         const ramp_duration = curr_ramp.duration_samples();
 
-        const val = curr_ramp.at(adsr.hold_duration);
+        const val = curr_ramp.at(@truncate(adsr.hold_duration));
         adsr.hold_duration += 1;
 
         if (adsr.hold_duration >= ramp_duration) {

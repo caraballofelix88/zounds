@@ -37,7 +37,7 @@ pub fn Wavetable(comptime num_buckets: comptime_int, comptime waveform: Waveform
     var buf: [num_buckets]f32 = undefined;
 
     const num_harmonics = 9;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     // is maxing out eval branches like this clumsy?
     @setEvalBranchQuota(std.math.maxInt(u32));

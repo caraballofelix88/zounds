@@ -7,10 +7,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mod = b.addModule("zounds", .{ .root_source_file = .{
-        .src_path = .{ .owner = b, .sub_path = "src/main.zig" },
-    } });
-
     const example_name = b.option(
         []const u8,
         "example_name",
@@ -20,6 +16,29 @@ pub fn build(b: *std.Build) void {
     var exe_path_buf: [128]u8 = undefined;
     const exe_path = std.fmt.bufPrint(&exe_path_buf, "examples/{s}.zig", .{example_name}) catch "examples/tada.zig";
 
+    const mod = b.addModule("zounds", .{ .root_source_file = .{
+        .src_path = .{ .owner = b, .sub_path = "src/main.zig" },
+    } });
+
+    //
+    // Lib
+    //
+    const lib = b.addStaticLibrary(.{
+        .name = "zounds",
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    lib.root_module.addImport("zounds", mod);
+    linkPlatformFrameworks(target, lib);
+
+    const lib_install = b.addInstallArtifact(lib, .{});
+    lib_install.step.dependOn(b.getInstallStep());
+
+    //
+    // Example exe
+    //
     const exe = b.addExecutable(.{
         .name = example_name,
         .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = exe_path } },
@@ -28,37 +47,16 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.addImport("zounds", mod);
-
     linkPlatformFrameworks(target, exe);
 
-    b.installArtifact(exe);
+    const install_exe = b.addInstallArtifact(exe, .{});
+    const run_exe = b.addRunArtifact(exe);
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
+    run_exe.step.dependOn(&install_exe.step);
 
-    const run_step = b.step("run", "run example");
-    run_step.dependOn(&run_cmd.step);
-
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const main_tests = b.addTest(.{
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/tests.zig" } },
-        .target = target,
-        .optimize = optimize,
-    });
-
-    main_tests.root_module.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } });
-
-    linkPlatformFrameworks(target, main_tests);
-
-    const run_main_tests = b.addRunArtifact(main_tests);
-
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build test`
-    // This will evaluate the `test` step rather than the default, which is "install".
-    const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&run_main_tests.step);
-
+    //
+    // Check executable build
+    //
     const check_exe = b.addExecutable(.{
         .name = example_name,
         .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = exe_path } },
@@ -66,8 +64,38 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     check_exe.root_module.addImport("zounds", mod);
-
     linkPlatformFrameworks(target, check_exe);
+
+    //
+    // Test executable
+    //
+    const main_tests = b.addTest(.{
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/tests.zig" } },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    main_tests.root_module.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } });
+    linkPlatformFrameworks(target, main_tests);
+
+    const run_main_tests = b.addRunArtifact(main_tests);
+
+    //
+    // Compile Steps
+    //
+
+    // default zig build behavior
+    // lib_install.step.dependOn(b.getInstallStep());
+    run_exe.step.dependOn(b.getInstallStep());
+
+    // const lib_step = b.step("lib", "build static lib");
+    // lib_step.dependOn(&lib_install.step);
+
+    const test_step = b.step("test", "Run library tests");
+    test_step.dependOn(&run_main_tests.step);
+
+    const run_step = b.step("run", "run example");
+    run_step.dependOn(&run_exe.step);
 
     const check_step = b.step("check", "compile without emitting for diagnostics");
     check_step.dependOn(&check_exe.step);

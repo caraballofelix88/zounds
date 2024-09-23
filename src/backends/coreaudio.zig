@@ -7,6 +7,8 @@ const utils = @import("../utils.zig");
 const midi = @import("../midi.zig");
 const backends = @import("backends.zig");
 
+const log = std.log.scoped(.backend_coreaudio);
+
 const DeviceState = enum {
     uninitialized,
     stopped,
@@ -156,14 +158,14 @@ fn getOutputDevices(alloc: std.mem.Allocator) ![]main.Device {
         null,
         &property_size,
     )) catch |err| {
-        std.debug.print("error finding device count: {}\n", .{err});
+        log.debug("error finding device count: {}\n", .{err});
     };
 
     const num_devices = property_size / @sizeOf(c.AudioDeviceID);
     const device_ids: []c.AudioDeviceID = try alloc.alloc(c.AudioDeviceID, num_devices);
 
     osStatusHandler(c.AudioObjectGetPropertyData(c.kAudioObjectSystemObject, &device_property_address, 0, null, &property_size, device_ids.ptr)) catch |err| {
-        std.debug.print("error getting device ids: {}\n", .{err});
+        log.debug("error getting device ids: {}\n", .{err});
     };
 
     var device_list = std.ArrayList(main.Device).init(alloc);
@@ -184,13 +186,13 @@ fn getOutputDevices(alloc: std.mem.Allocator) ![]main.Device {
 
         // device name
         osStatusHandler(c.AudioObjectGetPropertyData(device_id, &property_address, 0, null, &p_size, &device_name)) catch |err| {
-            std.debug.print("Error getting device name: {}\n", .{err});
+            log.debug("Error getting device name: {}\n", .{err});
         };
 
         // manufacturer name
         property_address.mSelector = c.kAudioDevicePropertyDeviceManufacturer;
         osStatusHandler(c.AudioObjectGetPropertyData(device_id, &property_address, 0, null, &p_size, &manufacturer_name)) catch |err| {
-            std.debug.print("error getting manufacturer name for device {}: {}\n", .{ device_id, err });
+            log.debug("error getting manufacturer name for device {}: {}\n", .{ device_id, err });
         };
 
         // TODO: more properties
@@ -200,7 +202,7 @@ fn getOutputDevices(alloc: std.mem.Allocator) ![]main.Device {
         // - c.kAudioDevicePropertyStreamFormats
         // - c.kAudioDevicePropertyStreamFormatSupported
 
-        std.debug.print("Device {}:\t{s}, {s}\n", .{ device_id, device_name, manufacturer_name });
+        log.debug("Device {}:\t{s}, {s}\n", .{ device_id, device_name, manufacturer_name });
 
         const name = try std.fmt.allocPrint(
             alloc,
@@ -237,7 +239,7 @@ pub const Player = struct {
     // TODO: appropriate error handling
     pub fn play(p: *Player) void {
         osStatusHandler(c.AudioOutputUnitStart(p.audio_unit)) catch |err| {
-            std.debug.print("uh oh, playing didn't work: {}\n", .{err});
+            log.debug("uh oh, playing didn't work: {}\n", .{err});
         };
 
         p.is_playing = true;
@@ -245,7 +247,7 @@ pub const Player = struct {
 
     pub fn pause(p: *Player) void {
         osStatusHandler(c.AudioOutputUnitStop(p.audio_unit)) catch |err| {
-            std.debug.print("uh oh, playing didn't work: {}\n", .{err});
+            log.debug("uh oh, playing didn't work: {}\n", .{err});
         };
 
         p.is_playing = false;
@@ -262,7 +264,7 @@ pub const Player = struct {
             amplitude,
             0,
         )) catch |err| {
-            std.debug.print("error setting volume: {}\n", .{err});
+            log.debug("error setting volume: {}\n", .{err});
         };
     }
 
@@ -275,7 +277,7 @@ pub const Player = struct {
             0,
             &vol,
         )) catch |err| {
-            std.debug.print("error retrieving volume: {}\n", .{err});
+            log.debug("error retrieving volume: {}\n", .{err});
         };
         return vol;
     }
@@ -302,7 +304,7 @@ fn osStatusHandler(result: c.OSStatus) !void {
             else => Error.GenericError,
         };
 
-        std.debug.print("OSStatus error:\t{}\nResult out:\t{}\n\n", .{ out, result });
+        log.debug("OSStatus error:\t{}\nResult out:\t{}\n\n", .{ out, result });
 
         return out;
     }
@@ -330,7 +332,7 @@ fn midiNotifyProc(notif: [*c]const c.MIDINotification, refCon: ?*anyopaque) call
 
     // TODO: use c.kMIDImsg* to track incoming notifications
     // /Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk/System/Library/Frameworks/CoreMIDI.framework/Versions/A/Headers/MIDIServices.h:683
-    std.debug.print("MIDI notification received:\t{any}\n", .{notif.*});
+    log.debug("MIDI notification received:\t{any}\n", .{notif.*});
 }
 
 // assumes single packet transmission for now. Will need refactoring to handle traversing packet list
@@ -348,7 +350,7 @@ fn midiPacketReader(packets: [*c]const c.MIDIPacketList, read_proc_ref: ?*anyopa
     const msg: midi.Message = midi.Message.fromBytes(packet.data[0..packet.length], null) catch |err| {
         std.debug.panic("message parse failure:\t{}\n", .{err});
     };
-    std.debug.print("MIDI Message:\t{}, channel:{}, {x}\n\n", .{ msg.status.kind(), msg.status.channel(), msg.data });
+    log.debug("MIDI Message:\t{}, channel:{}, {x}\n\n", .{ msg.status.kind(), msg.status.channel(), msg.data });
 
     std.Thread.Mutex.lock(cb_struct.mut);
     defer std.Thread.Mutex.unlock(cb_struct.mut);
@@ -378,7 +380,7 @@ fn getStringProperty(buf: []u8, obj_ref: c.MIDIObjectRef, property_key: []const 
     const key_ref = getStringRef(property_key);
 
     osStatusHandler(c.MIDIObjectGetStringProperty(obj_ref, key_ref, &property_ref)) catch |err| {
-        std.debug.print("Error getting MIDIObject property {s}:\t{}\n", .{ property_key, err });
+        log.debug("Error getting MIDIObject property {s}:\t{}\n", .{ property_key, err });
         return Error.MIDIPropertyError;
     };
 
@@ -391,7 +393,7 @@ fn getIntegerProperty(val: *i32, obj_ref: c.MIDIObjectRef, property_key: []const
     const key_ref = getStringRef(property_key);
 
     osStatusHandler(c.MIDIObjectGetIntegerProperty(obj_ref, key_ref, @alignCast(val))) catch |err| {
-        std.debug.print("Error getting MIDIObject Property: {s}:\t{}\n", .{ property_key, err });
+        log.debug("Error getting MIDIObject Property: {s}:\t{}\n", .{ property_key, err });
     };
 }
 
@@ -400,7 +402,7 @@ fn getPropertiesString(buf: []u8, ref: c.MIDIObjectRef) void {
 
     const DEEP = 1; // DEEP = 1 gets nested properties
     osStatusHandler(c.MIDIObjectGetProperties(ref, &object_plist, DEEP)) catch |err| {
-        std.debug.print("Error pulling MIDI object properties:\t{}\n", .{err});
+        log.debug("Error pulling MIDI object properties:\t{}\n", .{err});
     };
 
     const stream: c.CFWriteStreamRef = getWriteStream(buf);
@@ -452,18 +454,18 @@ pub const Midi = struct {
             // InputPortCreate + MIDIReadProc should be deprecated in favor of MIDIInputPortCreateWithProtocol + midiReceiveBlock
             // zig C header translation doesn't yet support C block nodes, so it is what it is for now
             osStatusHandler(c.MIDIInputPortCreate(ref, port_name, &midiPacketReader, @ptrCast(@constCast(cb_struct orelse null)), &port_ref)) catch |err| {
-                std.debug.print("Error creating midi client input port:\t{}\n", .{err});
+                log.debug("Error creating midi client input port:\t{}\n", .{err});
             };
 
             for (0..num_sources) |n| {
                 const endpoint = try createMidiSource(alloc, n);
-                std.debug.print("Input Endpoint #{}:\n", .{n});
-                std.debug.print("Source Name:\t{s}\n", .{endpoint.name});
-                std.debug.print("Source ID:\t{}\n\n", .{endpoint.id});
+                log.debug("Input Endpoint #{}:\n", .{n});
+                log.debug("Source Name:\t{s}\n", .{endpoint.name});
+                log.debug("Source ID:\t{}\n\n", .{endpoint.id});
 
                 if (endpoint.entity) |e| {
-                    std.debug.print("Source Entity Name:\t{s}\n", .{e.name});
-                    std.debug.print("Source Entity ID:\t{}\n\n", .{e.id});
+                    log.debug("Source Entity Name:\t{s}\n", .{e.name});
+                    log.debug("Source Entity ID:\t{}\n\n", .{e.id});
                 }
 
                 try available_inputs.append(endpoint);
@@ -497,7 +499,7 @@ pub const Midi = struct {
         // TODO: provide callback to connected port
         pub fn connectInputSource(client: *Client, index: u8) !void {
             if (client.active_input == index) {
-                std.debug.print("Already connected to input source {}.\n", .{index});
+                log.debug("Already connected to input source {}.\n", .{index});
                 return;
             }
 
@@ -507,12 +509,12 @@ pub const Midi = struct {
             _ = c.MIDIObjectFindByUniqueID(source_id, &source, null);
 
             _ = osStatusHandler(c.MIDIPortConnectSource(client.input_port, source, null)) catch |err| {
-                std.debug.print("Error connecting port to source:\t{}\n", .{err});
+                log.debug("Error connecting port to source:\t{}\n", .{err});
             };
 
             var name_buf: [64]u8 = undefined;
             const name = try getStringProperty(@constCast(&name_buf), source, "name");
-            std.debug.print("Connected input {}:\t{}, {s}\n", .{ index, source_id, name });
+            log.debug("Connected input {}:\t{}, {s}\n", .{ index, source_id, name });
             client.active_input = index;
         }
     };
@@ -527,7 +529,7 @@ pub const Midi = struct {
                 // this is okay, but indicates source is virtual and not associated with a physical entity.
                 is_virtual = true;
             } else {
-                std.debug.print("Error creating midi source:\t{}\n", .{err});
+                log.debug("Error creating midi source:\t{}\n", .{err});
                 return err;
             }
         };
@@ -569,14 +571,14 @@ pub const Midi = struct {
         var id: i32 = undefined;
         const device_ref: c.MIDIDeviceRef = c.MIDIGetDevice(idx);
 
-        std.debug.print("Create \n", .{});
+        log.debug("Create \n", .{});
 
         var name = try getStringProperty(&name_buf, device_ref, "name");
         getIntegerProperty(&id, device_ref, "uniqueID");
 
         var id_str: [32]u8 = undefined;
         _ = std.fmt.formatIntBuf(&id_str, id, 10, .lower, .{});
-        std.debug.print("creating midi device {}:\n", .{idx});
+        log.debug("creating midi device {}:\n", .{idx});
         const device = try midi.Device.init(alloc, &name, &id_str);
 
         return device;
@@ -588,7 +590,7 @@ pub const Midi = struct {
         const receiver_name = getStringRef("Zounds Midi Client");
         // TODO: update MIDINotifyProc to track updates to available midi devices
         osStatusHandler(c.MIDIClientCreate(receiver_name, &midiNotifyProc, null, &ref)) catch |err| {
-            std.debug.print("Error creating midi client:\t{}\n", .{err});
+            log.debug("Error creating midi client:\t{}\n", .{err});
         };
         return ref;
     }
