@@ -199,8 +199,8 @@ pub fn Graph(comptime opts: Options) type {
 
             for (nodes, 0..) |*node, idx| {
                 for (node.ins()) |in| {
-                    if (in.val.* == .handle) {
-                        const src_node_idx = ctx.scratch_source_map[in.val.*.handle.hdl.idx];
+                    if (in.field_ptr.* == .handle) {
+                        const src_node_idx = ctx.scratch_source_map[in.field_ptr.*.handle.hdl.idx];
                         adj[idx][src_node_idx] = true;
                     }
                 }
@@ -293,7 +293,7 @@ pub fn Graph(comptime opts: Options) type {
                 if (should_print == true) {
                     const out = node.out(0);
 
-                    log.debug("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out.val.get() });
+                    log.debug("processing node {s}:\noutput:\t{}\n\n", .{ node.id, out.field_ptr.get() });
                 }
             }
         }
@@ -352,7 +352,7 @@ pub fn Graph(comptime opts: Options) type {
                     .ctx = ctx.context(),
                 } };
 
-                out.val.* = store_signal;
+                out.field_ptr.* = store_signal;
 
                 // TODO: breaks if we pull from freelist?
                 ctx.signal_count += 1;
@@ -376,7 +376,7 @@ pub fn Graph(comptime opts: Options) type {
             if (getNode(ctx, hdl)) |node| {
                 for (node.outs()) |out| {
                     // increment gen on all signals for node
-                    switch (out.val.*) {
+                    switch (out.field_ptr.*) {
                         .handle => |out_hdl| {
                             ctx.scratch_gen[out_hdl.hdl.idx] += 1;
                             ctx.scratch_free_list.writeItem(out_hdl.hdl.idx) catch {
@@ -472,17 +472,17 @@ pub fn Graph(comptime opts: Options) type {
             // iterate through ports on node till we find the right one, i guess?
             if (getSignalSource(ctx, hdl)) |src_node| {
                 for (src_node.ins()) |in| {
-                    if (in.val.* == .handle) {
-                        if (in.val.*.handle.hdl.idx == hdl.idx) {
-                            return in.val;
+                    if (in.field_ptr.* == .handle) {
+                        if (in.field_ptr.*.handle.hdl.idx == hdl.idx) {
+                            return in.field_ptr;
                         }
                     }
                 }
 
                 for (src_node.outs()) |out| {
-                    if (out.val.* == .handle) {
-                        if (out.val.*.handle.hdl.idx == hdl.idx) {
-                            return out.val;
+                    if (out.field_ptr.* == .handle) {
+                        if (out.field_ptr.*.handle.hdl.idx == hdl.idx) {
+                            return out.field_ptr;
                         }
                     }
                 }
@@ -537,10 +537,8 @@ pub fn Graph(comptime opts: Options) type {
     };
 }
 
-// TODO: revisit
-// Do we need this array space to keep track of signal ptrs?
-// How do we track signal field names? we need to pass that along
 pub const Node = struct {
+    src_type: []const u8,
     id: []const u8 = "x",
     num_inlets: u8 = undefined,
     num_outlets: u8 = undefined,
@@ -548,16 +546,17 @@ pub const Node = struct {
     outlets: [MAX_PORT_COUNT]PortField = undefined,
     ptr: *anyopaque,
     processFn: *const fn (*anyopaque) void,
-    portletFn: *const fn (*anyopaque, []const u8) PortField,
+    getPortFn: *const fn (*anyopaque, []const u8) PortField,
 
     pub fn init(ptr: *anyopaque, T: type) Node {
         const concrete: *T = @ptrCast(@alignCast(ptr));
         const P = Ports(T);
         var node: Node = .{
+            .src_type = @typeName(T),
             .ptr = ptr,
             .id = concrete.id,
             .processFn = &T.process,
-            .portletFn = &P.get,
+            .getPortFn = &P.getPort,
         };
 
         const p_ins = P.ins(ptr);
@@ -581,12 +580,10 @@ pub const Node = struct {
     }
 
     pub fn in(n: *const Node, idx: usize) PortField {
-        // TODO: assert idx no greater than inlet count
         return n.inlets[idx];
     }
 
     pub fn out(n: *const Node, idx: usize) PortField {
-        // TODO: assert idx no greater than inlet count
         return n.outlets[idx];
     }
 
@@ -595,30 +592,9 @@ pub const Node = struct {
     }
 
     pub fn port(n: *const Node, field_name: []const u8) PortField {
-        return n.portletFn(n.ptr, field_name);
+        return n.getPortFn(n.ptr, field_name);
     }
 };
-
-pub const SignalDirection = enum { in, out };
-pub fn TestSignal(comptime dir: SignalDirection, comptime ValueType: type) type {
-    // opportunity to enforce unidirectional data flow, here
-
-    return struct {
-        const Self = @This();
-
-        pub fn get(s: Self) ValueType {
-            _ = s; // autofix
-        }
-
-        pub fn set(s: Self, v: ValueType) void {
-            _ = s; // autofix
-            _ = v; // autofix
-            if (dir != .out) {
-                return;
-            }
-        }
-    };
-}
 
 //
 // Signal ideas
@@ -626,11 +602,10 @@ pub fn TestSignal(comptime dir: SignalDirection, comptime ValueType: type) type 
 // type_tag: type enum, dictates shape of value
 // SignalValue(T): dictates source of signal, effectively the stuff below
 //
-
+const SignalHandle = struct { hdl: Handle, ctx: *const GraphContext };
 pub const Signal = union(enum) {
     ptr: *f32,
-    // NOTE: to be provided by signal graph context, don't assign otherwise
-    handle: struct { hdl: Handle, ctx: *const GraphContext },
+    handle: SignalHandle, // NOTE: to be provided by signal graph context, don't assign otherwise
     static: f32,
     vol: *volatile f32,
 
@@ -665,14 +640,14 @@ pub const Signal = union(enum) {
     }
 };
 
-// https://zigbin.io/9222cb
-// shoutouts to Francis on the forums
 pub const PortField = struct {
-    val: *Signal,
+    field_ptr: *Signal,
     name: []const u8,
     default_val: Signal,
 };
 
+// https://zigbin.io/9222cb
+// shoutouts to Francis on the forums
 pub fn Ports(comptime T: anytype) type {
     // Serves as an interface to a concrete class's input and output.
     // Upstream types must designate which fields are input and output data through
@@ -685,95 +660,234 @@ pub fn Ports(comptime T: anytype) type {
     // be the same type, because I can't quite figure out how to make lists of heterogeneous pointers work ergonomically at runtime.
     // eg. how do we provide Signal types that don't care what their Child type is?
     // idea: Signals as union types, like before
+    //
+
+    const FieldEnum = std.meta.FieldEnum(T);
+
+    const fields = @typeInfo(T).Struct.fields;
+
+    const in_count = comptime blk: {
+        var idx = 0;
+
+        for (fields) |field| {
+            if (field.type == DirSignal(.in)) {
+                idx += 1;
+            }
+        }
+        break :blk idx;
+    };
+
+    const in_sigs: [in_count]FieldEnum = comptime blk: {
+        var ins: [fields.len]FieldEnum = undefined;
+        var idx = 0;
+
+        for (fields) |field| {
+            if (field.type == DirSignal(.in)) {
+                ins[idx] = @field(FieldEnum, field.name);
+                idx += 1;
+            }
+        }
+        break :blk ins[0..idx].*;
+    };
+
+    const out_count = comptime blk: {
+        var idx = 0;
+
+        for (fields) |field| {
+            if (field.type == DirSignal(.out)) {
+                idx += 1;
+            }
+        }
+        break :blk idx;
+    };
+
+    const out_sigs: [out_count]FieldEnum = comptime blk: {
+        var outs: [fields.len]FieldEnum = undefined;
+        var idx = 0;
+
+        for (fields) |field| {
+            if (field.type == DirSignal(.out)) {
+                outs[idx] = @field(FieldEnum, field.name);
+                idx += 1;
+            }
+        }
+        break :blk outs[0..idx].*;
+    };
+
+    const t_ins = if (@hasDecl(T, "ins")) T.ins else in_sigs;
+    const t_outs = if (@hasDecl(T, "outs")) T.outs else out_sigs;
 
     return struct {
         t: *T,
 
         const Self = @This();
-        const FE = std.meta.FieldEnum(T);
-
         const default_signal: Signal = .{ .static = 0.0 };
 
-        pub fn ins(ptr: *anyopaque) [T.ins.len]PortField {
+        pub fn ins(ptr: *anyopaque) [t_ins.len]PortField {
             const t: *T = @ptrCast(@alignCast(ptr));
-            var buf: [T.ins.len]PortField = undefined;
+            var buf: [t_ins.len]PortField = undefined;
 
-            inline for (T.ins, 0..T.ins.len) |port, idx| {
+            inline for (t_ins, 0..t_ins.len) |port, idx| {
                 const info = std.meta.fieldInfo(T, port);
-                const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
-                buf[idx] = .{
-                    .val = &@field(t, @tagName(port)),
-                    .name = info.name,
-                    .default_val = default_val.*,
-                };
-            }
 
-            return buf;
-        }
+                switch (info.type) {
+                    DirSignal(.in) => {
+                        var outer_field = &@field(t, @tagName(port));
+                        const default_val: Signal = @as(*const DirSignal(.in), @ptrCast(@alignCast(&info.default_value.?.*))).val;
 
-        pub fn outs(ptr: *anyopaque) [T.outs.len]PortField {
-            var t: *T = @ptrCast(@alignCast(ptr));
-            var buf: [T.outs.len]PortField = undefined;
-
-            inline for (T.outs, 0..T.outs.len) |port, idx| {
-                const info = std.meta.fieldInfo(T, port);
-                const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
-
-                buf[idx] = .{
-                    .val = &@field(t, @tagName(port)),
-                    .name = info.name,
-                    .default_val = default_val.*,
-                };
-            }
-
-            return buf;
-        }
-
-        pub fn get(ptr: *anyopaque, field_str: []const u8) PortField {
-            const t: *T = @ptrCast(@alignCast(ptr));
-
-            inline for (T.ins) |in| {
-                if (std.mem.eql(u8, @tagName(in), field_str)) {
-                    const info = std.meta.fieldInfo(T, in);
-                    const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
-                    return .{
-                        .val = &@field(t, @tagName(in)),
-                        .name = info.name,
-                        .default_val = default_val.*,
-                    };
+                        buf[idx] = .{
+                            .field_ptr = &@field(outer_field, "val"),
+                            .name = info.name,
+                            .default_val = default_val,
+                        };
+                    },
+                    Signal => {
+                        const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                        buf[idx] = .{
+                            .field_ptr = &@field(t, @tagName(port)),
+                            .name = info.name,
+                            .default_val = default_val.*,
+                        };
+                    },
+                    else => {},
                 }
             }
 
-            inline for (T.outs) |out| {
-                if (std.mem.eql(u8, @tagName(out), field_str)) {
-                    const info = std.meta.fieldInfo(T, out);
-                    const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
-                    return .{
-                        .val = &@field(t, @tagName(out)),
-                        .name = info.name,
-                        .default_val = default_val.*,
-                    };
+            return buf;
+        }
+
+        pub fn outs(ptr: *anyopaque) [t_outs.len]PortField {
+            const t: *T = @ptrCast(@alignCast(ptr));
+            var buf: [t_outs.len]PortField = undefined;
+
+            inline for (t_outs, 0..t_outs.len) |port, idx| {
+                const info = std.meta.fieldInfo(T, port);
+
+                switch (info.type) {
+                    DirSignal(.out) => {
+                        var outer_field = &@field(t, @tagName(port));
+                        const default_val: Signal = @as(*const DirSignal(.out), @ptrCast(@alignCast(&info.default_value.?.*))).val;
+
+                        buf[idx] = .{
+                            .field_ptr = &@field(outer_field, "val"),
+                            .name = info.name,
+                            .default_val = default_val,
+                        };
+                    },
+
+                    Signal => {
+                        const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                        buf[idx] = .{
+                            .field_ptr = &@field(t, @tagName(port)),
+                            .name = info.name,
+                            .default_val = default_val.*,
+                        };
+                    },
+                    else => {},
+                }
+            }
+
+            return buf;
+        }
+
+        pub fn getPort(ptr: *anyopaque, field_str: []const u8) PortField {
+            const t: *T = @ptrCast(@alignCast(ptr));
+
+            inline for (t_ins ++ t_outs) |port| {
+                if (std.mem.eql(u8, @tagName(port), field_str)) {
+                    const info = std.meta.fieldInfo(T, port);
+                    switch (info.type) {
+                        DirSignal(.in) => {
+                            var outer_field = &@field(t, @tagName(port));
+
+                            const default_val: Signal = @as(*const DirSignal(.in), @ptrCast(@alignCast(&info.default_value.?.*))).val;
+
+                            return .{
+                                .field_ptr = &@field(outer_field, "val"),
+                                .name = info.name,
+                                .default_val = default_val,
+                            };
+                        },
+                        DirSignal(.out) => {
+                            var outer_field = &@field(t, @tagName(port));
+
+                            const default_val: Signal = @as(*const DirSignal(.out), @ptrCast(@alignCast(&info.default_value.?.*))).val;
+
+                            return .{
+                                .field_ptr = &@field(outer_field, "val"),
+                                .name = info.name,
+                                .default_val = default_val,
+                            };
+                        },
+
+                        Signal => {
+                            const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                            return .{
+                                .field_ptr = &@field(t, @tagName(port)),
+                                .name = info.name,
+                                .default_val = default_val.*,
+                            };
+                        },
+                        else => {},
+                    }
                 }
             }
 
             unreachable;
         }
+    };
+}
 
-        pub fn getIn(ptr: *anyopaque, comptime idx: usize) *std.meta.FieldType(T, T.ins[idx]) {
-            const t: *T = @ptrCast(@alignCast(ptr));
+pub const SignalDirection = enum { in, out };
 
-            return &@field(t, @tagName(T.ins[idx]));
+// comptime directional signal idea. The structural distinction between "in" and "out" is trivial, but I wanted a good way to distinguish
+// at comptime without digging into signal field default values or names. Got it's own jank, though.
+pub fn DirSignal(comptime dir: SignalDirection) type {
+    return struct {
+        dir: SignalDirection = dir,
+        val: Signal,
+
+        const Self = @This();
+
+        pub fn get(s: Self) f32 {
+            return s.val.get();
         }
 
-        pub fn getOut(ptr: *anyopaque, comptime idx: usize) *std.meta.FieldType(T, T.outs[idx]) {
-            const t: *T = @ptrCast(@alignCast(ptr));
-
-            return &@field(t, @tagName(T.outs[idx]));
+        pub fn set(s: Self, v: f32) void {
+            return s.val.set(v);
         }
 
-        pub fn getPtr(ptr: *anyopaque, comptime fe: FE) *std.meta.FieldType(T, fe) {
-            const t: *T = @ptrCast(@alignCast(ptr));
-            return &@field(t, @tagName(fe));
+        pub fn source(s: Self) ?Handle {
+            return s.val.source();
         }
     };
+}
+
+test "SignalDirs" {
+    const Wobble = struct {
+        id: []const u8 = "wobb",
+
+        base_pitch: DirSignal(.in) = .{ .val = .{ .static = 440.0 } },
+        frequency: DirSignal(.in) = .{ .val = .{ .static = 10.0 } },
+        amp: DirSignal(.in) = .{ .val = .{ .static = 10.0 } },
+
+        out: DirSignal(.out) = .{ .val = .{ .static = 0.0 } },
+
+        old_signal: Signal = .{ .static = 5.0 },
+
+        phase: f32 = 0,
+
+        pub const ins = .{ .base_pitch, .frequency, .amp };
+        pub const outs = .{.out};
+    };
+
+    var wobb = Wobble{};
+
+    const P = Ports(Wobble);
+
+    const port = P.getPort(&wobb, "base_pitch");
+
+    std.debug.print("wobb pitch:\t{}\t{s}\t{}\n", .{ port.field_ptr, port.name, port.default_val });
+
+    try std.testing.expectEqual(P.getPort(&wobb, "base_pitch"), PortField{ .field_ptr = &wobb.base_pitch.val, .name = "base_pitch", .default_val = .{ .static = 440.0 } });
 }

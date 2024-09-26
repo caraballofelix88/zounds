@@ -61,12 +61,12 @@ pub fn main() !void {
         var note_node = graph_ctx.getNode(hdl).?;
 
         const field_str = try std.fmt.bufPrint(&field_name_buf, "in_{}", .{idx + 1});
-        try graph_ctx.connect(chord_node.port(field_str).val, note_node.port("out").val);
-        try graph_ctx.connect(note_node.port("amp").val, adsr_node.port("out").val);
+        try graph_ctx.connect(chord_node.port(field_str).field_ptr, note_node.port("out").field_ptr);
+        try graph_ctx.connect(note_node.port("amp").field_ptr, adsr_node.port("out").field_ptr);
     }
 
     // assign root signal to signal graph
-    signal_graph.root_signal = chord_node.port("out").val.*;
+    signal_graph.root_signal = chord_node.port("out").field_ptr.*;
 
     // TODO: audio context should derive its sample rate from available backend devices/formats, not the raw desired config
     var player_ctx = try zounds.Context.init(null, alloc, config);

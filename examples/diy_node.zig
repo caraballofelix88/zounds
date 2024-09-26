@@ -2,20 +2,22 @@ const std = @import("std");
 const zounds = @import("zounds");
 
 const Signal = zounds.signals.Signal;
+const In = zounds.signals.DirSignal(.in);
+const Out = zounds.signals.DirSignal(.out);
+
 const Node = zounds.signals.Node;
 
 const Wobble = struct {
-    ctx: zounds.signals.GraphContext,
+    ctx: *const zounds.signals.GraphContext,
     id: []const u8 = "wobb",
-    base_pitch: Signal = .{ .static = 440.0 },
-    frequency: Signal = .{ .static = 10.0 },
 
-    amp: Signal = .{ .static = 10.0 },
-    out: Signal = .{ .static = 0.0 },
+    base_pitch: In = .{ .val = .{ .static = 440.0 } },
+    frequency: In = .{ .val = .{ .static = 10.0 } },
+    amp: In = .{ .val = .{ .static = 10.0 } },
+
+    out: Out = .{ .val = .{ .static = 0.0 } },
+
     phase: f32 = 0,
-
-    pub const ins = .{ .base_pitch, .frequency, .amp };
-    pub const outs = .{.out};
 
     pub fn process(ptr: *anyopaque) void {
         var w: *Wobble = @ptrCast(@alignCast(ptr));
@@ -47,22 +49,24 @@ pub fn main() !void {
     };
 
     var signal_graph = zounds.signals.Graph(.{ .channel_count = 2 }){ .format = config.desired_format };
-    var graph_ctx = signal_graph.context();
+    const graph_ctx = signal_graph.context();
 
     var wobb = Wobble{
         .ctx = graph_ctx,
-        .amp = .{ .static = 50.0 },
-        .frequency = .{ .static = 0.2 },
-        .base_pitch = .{ .static = zounds.utils.pitchFromNote(60) },
+        .amp = .{ .val = .{ .static = 50.0 } },
+        .frequency = .{ .val = .{ .static = 0.2 } },
+        .base_pitch = .{ .val = .{ .static = zounds.utils.pitchFromNote(60) } },
     };
-    var wobb_node = graph_ctx.register(&wobb);
+    const wobb_hdl = try graph_ctx.register(&wobb);
+    var wobb_node = graph_ctx.getNode(wobb_hdl).?;
 
     var osc = zounds.dsp.Oscillator{ .ctx = graph_ctx };
-    var osc_node = graph_ctx.register(&osc);
+    const osc_hdl = try graph_ctx.register(&osc);
+    var osc_node = graph_ctx.getNode(osc_hdl).?;
 
-    graph_ctx.connect(osc_node.port("pitch"), wobb_node.port("out"));
+    try graph_ctx.connect(osc_node.port("pitch").field_ptr, wobb_node.port("out").field_ptr);
 
-    signal_graph.root_signal = osc_node.port("out").*;
+    signal_graph.root_signal = osc_node.port("out").field_ptr.*;
 
     var player_ctx = try zounds.Context.init(.coreaudio, alloc, config);
 
@@ -75,7 +79,7 @@ pub fn main() !void {
     };
 
     const options: zounds.StreamOptions = .{
-        .write_ref = &graph_ctx,
+        .write_ref = @ptrCast(@constCast(graph_ctx)),
         .format = config.desired_format,
     };
 

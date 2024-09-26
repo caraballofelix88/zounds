@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
     ) orelse "tada";
 
     var exe_path_buf: [128]u8 = undefined;
-    const exe_path = std.fmt.bufPrint(&exe_path_buf, "examples/{s}.zig", .{example_name}) catch "examples/tada.zig";
+    const exe_path = std.fmt.bufPrint(&exe_path_buf, "examples/{s}.zig", .{example_name}) catch "examples/diy_node.zig";
 
     const mod = b.addModule("zounds", .{ .root_source_file = .{
         .src_path = .{ .owner = b, .sub_path = "src/main.zig" },
