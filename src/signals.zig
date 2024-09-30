@@ -19,7 +19,7 @@ pub const Handle = extern struct {
     gen: u8,
 };
 
-pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList, NodeGraphCycleDetected };
+pub const Error = error{ NoMoreNodeSpace, OtherError, BadProcessList, NodeGraphCycleDetected, SerializationError };
 pub const GraphContext = struct {
     ptr: *anyopaque,
     opts: Options,
@@ -126,6 +126,7 @@ pub const Options = struct {
 // TODO: could be broken up
 // free-list/gen array could be its own little data structure
 // TODO: instead of just(?) a freelist, we could also just track "alive" flags on each element of our node_store, to ensure the data is available during iteration
+// TODO: parent context? Nesting graphs?
 pub fn Graph(comptime opts: Options) type {
     return struct {
         scratch: [opts.scratch_size]f32 = std.mem.zeroes([opts.scratch_size]f32),
@@ -194,7 +195,7 @@ pub fn Graph(comptime opts: Options) type {
         pub const AdjMatrix = [opts.max_node_count][opts.max_node_count]bool;
 
         pub fn getAdjMatrix(ctx: *Self) AdjMatrix {
-            const nodes = ctx.node_store[0..];
+            const nodes = ctx.node_store[0..ctx.node_count];
             var adj: AdjMatrix = std.mem.zeroes(AdjMatrix);
 
             for (nodes, 0..) |*node, idx| {
@@ -537,6 +538,7 @@ pub fn Graph(comptime opts: Options) type {
     };
 }
 
+// TODO: inlet and outlet maximums should probably be supplied to generic. Fine for now, tho
 pub const Node = struct {
     src_type: []const u8,
     id: []const u8 = "x",

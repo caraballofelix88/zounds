@@ -4,19 +4,20 @@ const zounds = @import("zounds");
 const Signal = zounds.signals.Signal;
 const Node = zounds.signals.Node;
 
+const log = std.log.scoped(.examples_tada);
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    const config = zounds.ContextConfig{
-        .frames_per_packet = 1,
-        .desired_format = .{
-            .sample_format = .f32,
-            .sample_rate = 44_100,
-            .channels = zounds.ChannelPosition.fromChannelCount(2),
-            .is_interleaved = true,
-        },
+    const format: zounds.FormatData = .{
+        .sample_format = .f32,
+        .sample_rate = 44_100,
+        .channels = zounds.ChannelPosition.fromChannelCount(2),
+        .is_interleaved = true,
     };
+
+    const config = zounds.ContextConfig{ .frames_per_packet = 1, .desired_format = format };
 
     var signal_graph = zounds.signals.Graph(.{ .channel_count = 2 }){ .format = config.desired_format };
     var graph_ctx = signal_graph.context();
@@ -25,27 +26,52 @@ pub fn main() !void {
     var trigger: f32 = 0.0;
     var adsr = zounds.dsp.ADSR{ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
     const adsr_hdl = try graph_ctx.register(&adsr);
-    var adsr_node = graph_ctx.getNode(adsr_hdl).?;
+    const adsr_node = graph_ctx.getNode(adsr_hdl).?;
+    _ = adsr_node; // autofix
 
-    var osc_c = zounds.dsp.Oscillator{
+    // var osc_c = zounds.dsp.Oscillator{
+    //     .ctx = graph_ctx,
+    //     .id = "Osc:C",
+    //     .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
+    // };
+    //
+    var osc_c = try zounds.voices.AdditiveVoice.init(.{
+        .id = "osc c",
         .ctx = graph_ctx,
-        .id = "Osc:C",
-        .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
-    };
+        .trigger = &trigger,
+        .pitch = zounds.utils.pitchFromNote(60),
+        .format = format,
+    }, alloc);
     const c_node = try graph_ctx.register(&osc_c);
 
-    var osc_e = zounds.dsp.Oscillator{
+    // var osc_e = zounds.dsp.Oscillator{
+    //     .ctx = graph_ctx,
+    //     .id = "Osc:E",
+    //     .pitch = .{ .static = zounds.utils.pitchFromNote(65) },
+    // };
+    var osc_e = try zounds.voices.AdditiveVoice.init(.{
+        .id = "osc e",
         .ctx = graph_ctx,
-        .id = "Osc:E",
-        .pitch = .{ .static = zounds.utils.pitchFromNote(65) },
-    };
+        .trigger = &trigger,
+        .pitch = zounds.utils.pitchFromNote(65),
+        .format = format,
+    }, alloc);
     const e_node = try graph_ctx.register(&osc_e);
 
-    var osc_g = zounds.dsp.Oscillator{
+    // var osc_g = zounds.dsp.Oscillator{
+    //     .ctx = graph_ctx,
+    //     .id = "Osc:G",
+    //     .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
+    // };
+
+    var osc_g = try zounds.voices.AdditiveVoice.init(.{
+        .id = "osc g",
         .ctx = graph_ctx,
-        .id = "Osc:G",
-        .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
-    };
+        .format = format,
+        .trigger = &trigger,
+        .pitch = zounds.utils.pitchFromNote(69),
+    }, alloc);
+
     const g_node = try graph_ctx.register(&osc_g);
 
     var chord = zounds.dsp.Sink(3){ .ctx = graph_ctx };
@@ -62,10 +88,11 @@ pub fn main() !void {
 
         const field_str = try std.fmt.bufPrint(&field_name_buf, "in_{}", .{idx + 1});
         try graph_ctx.connect(chord_node.port(field_str).field_ptr, note_node.port("out").field_ptr);
-        try graph_ctx.connect(note_node.port("amp").field_ptr, adsr_node.port("out").field_ptr);
+        // try graph_ctx.connect(note_node.port("amp").field_ptr, adsr_node.port("out").field_ptr);
     }
 
     // assign root signal to signal graph
+    // signal_graph.root_signal = chord_node.port("out").field_ptr.*;
     signal_graph.root_signal = chord_node.port("out").field_ptr.*;
 
     // TODO: audio context should derive its sample rate from available backend devices/formats, not the raw desired config
@@ -81,7 +108,7 @@ pub fn main() !void {
 
     const options: zounds.StreamOptions = .{
         .write_ref = @ptrCast(@constCast(graph_ctx)),
-        .format = config.desired_format,
+        .format = format,
     };
 
     var player = try player_ctx.createPlayer(device, &writeFn, options);
@@ -94,7 +121,7 @@ pub fn main() !void {
 
     // ta
     trigger = 1.0;
-    std.debug.print("ta", .{});
+    log.debug("ta", .{});
     std.time.sleep(std.time.ns_per_ms * 180);
 
     trigger = 0.0;
@@ -102,10 +129,15 @@ pub fn main() !void {
 
     // dah~
     trigger = 1.0;
-    std.debug.print("-dah~\n", .{});
+    log.debug("-dah~\n", .{});
     std.time.sleep(std.time.ns_per_ms * 3000);
 
-    std.log.debug("ctx ticks:\t{}\n", .{graph_ctx.ticks()});
+    log.debug("ctx ticks:\t{}\n", .{graph_ctx.ticks()});
+
+    var str = std.ArrayList(u8).init(alloc);
+    try std.json.stringify(signal_graph.scratch, .{}, str.writer());
+
+    log.debug("json???\n{s}\n", .{str.items});
 }
 
 pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {

@@ -8,6 +8,7 @@ pub const readers = @import("readers/readers.zig");
 pub const backends = @import("backends/backends.zig");
 pub const dsp = @import("dsp/dsp.zig");
 pub const wavegen = @import("wavegen.zig");
+pub const voices = @import("voices/voices.zig");
 
 // TODO: midi client backends
 pub const coreaudio = @import("backends/coreaudio.zig");
