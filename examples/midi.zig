@@ -1,24 +1,48 @@
 const std = @import("std");
 const zounds = @import("zounds");
 
+const log = std.log.scoped(.example_midi);
+
 const NoteSynth = struct {
+    alloc: std.mem.Allocator,
     note: u8,
     trigger: f32 = 0, // really just 1 or 0 for now, but could eventually be note velocity
-    amp: f32 = 0, // output of adsr envelope
+    amp: f32 = 0, // max output of adsr envelope
     val: f32 = 0, // latest computed output
     osc: ?*zounds.dsp.Oscillator = null,
     envelope: ?*zounds.dsp.ADSR = null,
+    voice: ?*zounds.voices.AdditiveVoice = null,
+
+    pub fn deinit(v: *NoteSynth) void {
+        v.alloc.destroy(v.osc); // TODO: deallocing optionals?
+        v.alloc.destroy(v.envelope);
+
+        v.voice.?.deinit();
+        v.alloc.destroy(v.voice);
+    }
 };
 
 // TODO: how to implement voices? ADSR + filter + a couple of oscs, nested in a single config?
+//       subgraphs, maybe?
 const PolySynth = struct {
     id: []const u8 = "zynthezizer",
-    ctx: zounds.signals.GraphContext,
+    ctx: *const zounds.signals.GraphContext,
     alloc: std.mem.Allocator,
     active_notes: std.MultiArrayList(NoteSynth),
     mutex: std.Thread.Mutex,
 
     out: zounds.signals.Signal = .{ .static = 0.0 },
+
+    prev_note_count: usize = 0,
+    amp: f32 = 1.0,
+    amp_ramp_start: u64 = 0,
+    amp_ramp: zounds.envelope.Ramp = .{
+        .to = 1.0,
+        .from = 1.0,
+        .duration = .{ .millis = 30 },
+        .sample_rate = 44_100, // TODO: should come from ctx, somehow
+        .ramp_type = .linear,
+    },
 
     pub const ins = .{};
     pub const outs = .{.out};
@@ -26,14 +50,13 @@ const PolySynth = struct {
     const default_osc = .{};
     const default_env = zounds.envelope.generateADSR(.{});
 
-    pub fn init(ctx: zounds.signals.GraphContext, alloc: std.mem.Allocator) !PolySynth {
+    pub fn init(ctx: *const zounds.signals.GraphContext, alloc: std.mem.Allocator) !PolySynth {
         return .{ .ctx = ctx, .alloc = alloc, .active_notes = std.MultiArrayList(NoteSynth){}, .mutex = std.Thread.Mutex{} };
     }
 
     pub fn deinit(s: *PolySynth) void {
-        for (s.active_notes.items(.osc), s.active_notes.items(.envelope)) |*osc, *env| {
-            s.alloc.destroy(osc);
-            s.alloc.destroy(env);
+        for (s.active_notes.items) |note| {
+            note.deinit();
         }
         s.active_notes.deinit(s.alloc);
 
@@ -47,24 +70,59 @@ const PolySynth = struct {
         defer s.mutex.unlock();
         errdefer s.mutex.unlock();
 
-        var result: f32 = undefined;
+        var result: f32 = 0;
 
-        for (0..s.active_notes.len) |idx| {
-            s.active_notes.items(.envelope)[idx].?.node().process();
-            s.active_notes.items(.osc)[idx].?.node().process();
-            result += s.active_notes.items(.val)[idx];
+        const notes_slice = s.active_notes.slice();
+        for (0..notes_slice.len) |idx| {
+            // notes_slice.items(.envelope)[idx].?.node().process();
+            // notes_slice.items(.osc)[idx].?.node().process();
+
+            zounds.voices.AdditiveVoice.process(notes_slice.items(.voice)[idx].?);
+
+            const val = notes_slice.items(.val)[idx];
+
+            result += val;
         }
 
-        // TODO: this gets crunchy anywhere beyond 4 voices at once, how to regulate amplitude envelope with dynamic number of sources?
-        result /= 4;
+        // TODO: this still causes some noticeable jitter while active notes are falling off. What to do?
+        // handle amplitude
+        // amp for total active notes is calculated as a simple average
+        // when active notes change, the amplitude changes starkly from sample to sample, causing noticable clicks
+        // ramp amplitude from state to state
+
+        // check change in active notes
+        // update ramp to reflect change
+        if (s.prev_note_count != s.active_notes.len) {
+            s.prev_note_count = s.active_notes.len;
+            s.amp_ramp_start = s.ctx.ticks();
+            s.amp_ramp.from = s.amp;
+
+            if (s.active_notes.len > 0) {
+                s.amp_ramp.to = 1.0 / @as(f32, @floatFromInt(s.active_notes.len));
+            } else {
+                s.amp_ramp.to = 1.0;
+            }
+        }
+
+        s.amp = s.amp_ramp.at(s.ctx.ticks() - s.amp_ramp_start);
+        result *= s.amp;
 
         // purge completed notes
         var purge_idx: usize = 0;
         while (purge_idx < s.active_notes.len) {
             const adsr = s.active_notes.items(.envelope)[purge_idx].?;
-            if (adsr.state == .off) {
+            _ = adsr; // autofix
+
+            const voice_adsr_state = s.active_notes.items(.voice)[purge_idx].?.adsr_state;
+
+            if (voice_adsr_state == .off) {
+                log.debug("purging note {}", .{s.active_notes.items(.note)[purge_idx]});
                 s.alloc.destroy(s.active_notes.items(.osc)[purge_idx].?);
                 s.alloc.destroy(s.active_notes.items(.envelope)[purge_idx].?);
+
+                s.active_notes.items(.voice)[purge_idx].?.deinit();
+                s.alloc.destroy(s.active_notes.items(.voice)[purge_idx].?);
+
                 s.active_notes.swapRemove(purge_idx);
 
                 // after swap, reassign pointers for swapped note, if it exists
@@ -75,6 +133,9 @@ const PolySynth = struct {
                     s.active_notes.items(.envelope)[purge_idx].?.*.out = .{ .ptr = &s.active_notes.items(.amp)[purge_idx] };
                     s.active_notes.items(.osc)[purge_idx].?.*.amp = .{ .ptr = &s.active_notes.items(.amp)[purge_idx] };
                     s.active_notes.items(.osc)[purge_idx].?.*.out = .{ .ptr = &s.active_notes.items(.val)[purge_idx] };
+
+                    s.active_notes.items(.voice)[purge_idx].?.trigger = .{ .ptr = &s.active_notes.items(.trigger)[purge_idx] };
+                    s.active_notes.items(.voice)[purge_idx].?.out = .{ .ptr = &s.active_notes.items(.val)[purge_idx] };
                 }
             } else {
                 purge_idx += 1;
@@ -97,11 +158,29 @@ const PolySynth = struct {
         }
 
         const new_note = NoteSynth{
+            .alloc = s.alloc,
             .note = val,
             .trigger = 1.0,
         };
 
         try s.active_notes.append(s.alloc, new_note);
+
+        const voice = try s.alloc.create(zounds.voices.AdditiveVoice);
+        voice.* = try zounds.voices.AdditiveVoice.init(.{
+            .id = "voice",
+            .ctx = s.ctx,
+            .amp = 1.0,
+            .pitch = zounds.utils.pitchFromNote(val),
+            .format = .{
+                .sample_format = .f32,
+                .sample_rate = 44_100,
+                .channels = zounds.ChannelPosition.fromChannelCount(2),
+            },
+            .trigger = .{ .ptr = &s.active_notes.items(.trigger)[s.active_notes.len - 1] },
+        }, s.alloc);
+        voice.out = .{ .ptr = &s.active_notes.items(.val)[s.active_notes.len - 1] };
+
+        s.active_notes.items(.voice)[s.active_notes.len - 1] = voice;
 
         const adsr = try s.alloc.create(zounds.dsp.ADSR);
         adsr.* = zounds.dsp.ADSR{
@@ -156,12 +235,13 @@ pub fn main() !void {
     var graph = zounds.signals.Graph(.{}){
         .format = config.desired_format,
     };
-    var graph_context = graph.context();
+    const graph_context = graph.context();
 
     var midi_queue_mutex = std.Thread.Mutex{};
 
     var poly_synth = try PolySynth.init(graph_context, alloc);
-    var poly_synth_node = try graph_context.register(&poly_synth);
+    const poly_synth_hdl = try graph_context.register(&poly_synth);
+    var poly_synth_node = graph_context.getNode(poly_synth_hdl).?;
 
     var playerContext = try zounds.Context.init(.coreaudio, alloc, config);
     defer playerContext.deinit();
@@ -176,7 +256,7 @@ pub fn main() !void {
 
     var player = try playerContext.createPlayer(dummy_device, &writeFn, .{
         .format = config.desired_format,
-        .write_ref = &graph_context,
+        .write_ref = @ptrCast(@constCast(graph_context)),
     });
     defer player.deinit();
     _ = try player.setVolume(-20.0);
@@ -184,7 +264,7 @@ pub fn main() !void {
     var midi_msg_queue: std.fifo.LinearFifo(zounds.midi.Message, .Dynamic) = std.fifo.LinearFifo(zounds.midi.Message, .Dynamic).init(alloc);
 
     // TODO: split out midi backends
-    const on_update_struct = zounds.midi.ClientCallbackStruct{ .cb = &midiCallback, .ref = @ptrCast(@constCast(&midi_msg_queue)), .mut = &midi_queue_mutex };
+    const on_update_struct = zounds.midi.MessageCallbackStruct{ .cb = &midiCallback, .ref = @ptrCast(@constCast(&midi_msg_queue)), .mut = &midi_queue_mutex };
 
     var midi_client = try zounds.coreaudio.Midi.Client.init(alloc, &on_update_struct);
     defer midi_client.deinit();
@@ -212,7 +292,7 @@ pub fn main() !void {
         }
     }
 
-    graph.root_signal = poly_synth_node.port("out").*;
+    graph.root_signal = poly_synth_node.port("out").field_ptr.*;
 
     try midi_client.connectInputSource(selected_option - 1);
     player.play();
@@ -225,7 +305,7 @@ pub fn main() !void {
         defer midi_queue_mutex.unlock();
 
         while (midi_msg_queue.readItem()) |msg| {
-            std.debug.print("Reading msg in main thread:\t{}\t{}\n", .{ msg.status.kind(), msg });
+            log.debug("Reading msg in main thread:\t{}\t{}", .{ msg.status.kind(), msg });
             if (msg.status.kind() == .note_on and msg.data & 0xFF00 == 0x2c00) { // bottom left drum pad on the mpk mini
                 should_stop = true;
             }
@@ -260,6 +340,6 @@ fn midiCallback(sent_msg: *const zounds.midi.Message, queue_ptr: *anyopaque) cal
     var queue: *std.fifo.LinearFifo(zounds.midi.Message, .Dynamic) = @ptrCast(@alignCast(queue_ptr));
 
     _ = queue.writeItem(sent_msg.*) catch |err| {
-        std.debug.print("Midi message queue append error:\t{}\n", .{err});
+        log.warn("Midi message queue append error:\t{}", .{err});
     };
 }

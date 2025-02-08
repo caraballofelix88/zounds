@@ -231,12 +231,11 @@ pub fn Graph(comptime opts: Options) type {
         }
 
         fn printList(matrix: AdjMatrix, n: u8) void {
-            log.debug("List:\n\n", .{});
+            log.debug("List:\n", .{});
 
             for (matrix[0..n]) |row| {
-                log.debug("{any}\n", .{row[0..n]});
+                log.debug("{any}", .{row[0..n]});
             }
-            log.debug("\n", .{});
         }
 
         // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
@@ -841,6 +840,10 @@ pub fn Ports(comptime T: anytype) type {
 }
 
 pub const SignalDirection = enum { in, out };
+pub const ValueTag = enum { f, i };
+// Do not remember what I was doing here at all
+// pub fn PureSignal(comptime dir: SignalDirection, val: ValueTag) type {
+// }
 
 // comptime directional signal idea. The structural distinction between "in" and "out" is trivial, but I wanted a good way to distinguish
 // at comptime without digging into signal field default values or names. Got it's own jank, though.
@@ -864,6 +867,8 @@ pub fn DirSignal(comptime dir: SignalDirection) type {
         }
     };
 }
+pub const In = DirSignal(.in);
+pub const Out = DirSignal(.out);
 
 test "SignalDirs" {
     const Wobble = struct {

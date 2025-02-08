@@ -24,6 +24,8 @@ pub fn main() !void {
 
     // build trigger for chord envelope
     var trigger: f32 = 0.0;
+    const trigger_signal: Signal = .{ .ptr = &trigger };
+
     var adsr = zounds.dsp.ADSR{ .ctx = graph_ctx, .trigger = .{ .ptr = &trigger } };
     const adsr_hdl = try graph_ctx.register(&adsr);
     const adsr_node = graph_ctx.getNode(adsr_hdl).?;
@@ -38,7 +40,7 @@ pub fn main() !void {
     var osc_c = try zounds.voices.AdditiveVoice.init(.{
         .id = "osc c",
         .ctx = graph_ctx,
-        .trigger = &trigger,
+        .trigger = trigger_signal,
         .pitch = zounds.utils.pitchFromNote(60),
         .format = format,
     }, alloc);
@@ -52,7 +54,7 @@ pub fn main() !void {
     var osc_e = try zounds.voices.AdditiveVoice.init(.{
         .id = "osc e",
         .ctx = graph_ctx,
-        .trigger = &trigger,
+        .trigger = trigger_signal,
         .pitch = zounds.utils.pitchFromNote(65),
         .format = format,
     }, alloc);
@@ -68,7 +70,7 @@ pub fn main() !void {
         .id = "osc g",
         .ctx = graph_ctx,
         .format = format,
-        .trigger = &trigger,
+        .trigger = trigger_signal,
         .pitch = zounds.utils.pitchFromNote(69),
     }, alloc);
 
@@ -136,8 +138,6 @@ pub fn main() !void {
 
     var str = std.ArrayList(u8).init(alloc);
     try std.json.stringify(signal_graph.scratch, .{}, str.writer());
-
-    log.debug("json???\n{s}\n", .{str.items});
 }
 
 pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {

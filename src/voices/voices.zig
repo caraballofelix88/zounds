@@ -3,11 +3,13 @@ const dsp = @import("../dsp/dsp.zig");
 const signals = @import("../signals.zig");
 const main = @import("../main.zig");
 
+const log = std.log.scoped(.voices);
+
 const VoiceOpts = struct {
     ctx: *const signals.GraphContext,
     pitch: f32 = 50.0,
     amp: f32 = 1.0,
-    trigger: *f32,
+    trigger: signals.Signal = .{ .static = 0.0 },
     format: main.FormatData,
     id: []const u8,
 };
@@ -32,7 +34,11 @@ pub const AdditiveVoice = struct {
     arena: std.heap.ArenaAllocator = undefined,
 
     // pitch: signals.Signal = .{ .static = 440.0 },
-    // trigger: signals.Signal = .{ .static = 0.0 },
+    trigger: signals.Signal = .{ .static = 0.0 },
+    //
+
+    adsr_hdl: signals.Handle = undefined,
+    adsr_state: dsp.ADSR.State = .off,
 
     out: signals.Signal = .{ .static = 0.0 },
 
@@ -48,7 +54,7 @@ pub const AdditiveVoice = struct {
 
         const child_ctx = child_graph.context();
 
-        std.log.debug("incoming pitch arg from opts:\t{}\n", .{opts.pitch});
+        log.debug("incoming pitch arg from opts:\t{}", .{opts.pitch});
 
         const osc_1 = try alloc.create(dsp.Oscillator);
         osc_1.* = .{
@@ -100,7 +106,7 @@ pub const AdditiveVoice = struct {
         const sink_node = child_ctx.getNode(sink_hdl).?;
 
         const adsr = try alloc.create(dsp.ADSR);
-        adsr.* = .{ .ctx = child_ctx, .trigger = .{ .ptr = opts.trigger } };
+        adsr.* = .{ .ctx = child_ctx, .trigger = opts.trigger };
         const adsr_hdl = try child_ctx.register(adsr);
         const adsr_node = child_ctx.getNode(adsr_hdl).?;
 
@@ -121,17 +127,25 @@ pub const AdditiveVoice = struct {
             .arena = arena,
             .ctx = opts.ctx,
             .child_graph = child_graph,
+            .adsr_hdl = adsr_hdl,
         };
     }
 
     pub fn deinit(self: *AdditiveVoice) void {
-        self.arena.alloc().destroy();
+        _ = self.arena.reset(.free_all);
     }
 
     pub fn process(ptr: *anyopaque) void {
         var v: *AdditiveVoice = @ptrCast(@alignCast(ptr));
 
         const next = v.child_graph.context().next()[0];
+
+        const adsr_node = v.child_graph.context().getNode(v.adsr_hdl).?;
+        const adsr: *dsp.ADSR = @ptrCast(@alignCast(adsr_node.ptr));
+
+        if (adsr.state != v.adsr_state) {
+            v.adsr_state = adsr.state;
+        }
 
         // std.log.debug("processing voice {s}:\t{}\n", .{ v.id, next });
 

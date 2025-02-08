@@ -2,11 +2,12 @@ const std = @import("std");
 const zounds = @import("zounds");
 
 const Signal = zounds.signals.Signal;
-const In = zounds.signals.DirSignal(.in);
-const Out = zounds.signals.DirSignal(.out);
+const In = zounds.signals.In;
+const Out = zounds.signals.Out;
 
 const Node = zounds.signals.Node;
 
+// TODO: cook up a way to register the node definitions into the global context, for ease of consumption
 const Wobble = struct {
     ctx: *const zounds.signals.GraphContext,
     id: []const u8 = "wobb",

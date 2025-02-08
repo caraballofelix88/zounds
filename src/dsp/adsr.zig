@@ -3,7 +3,7 @@ const signals = @import("../signals.zig");
 const env = @import("../envelope.zig");
 
 pub const ADSR = struct {
-    const State = enum(u8) { attack = 0, sustain = 1, decay = 2, release = 3, off = 4 };
+    pub const State = enum(u8) { attack = 0, sustain = 1, decay = 2, release = 3, off = 4 };
     const epsilon = 0.005;
 
     const Self = @This();
