@@ -14,6 +14,9 @@ pub const clock = @import("clock.zig");
 pub const convert = @import("convert.zig");
 pub const signals = @import("signals.zig");
 
+pub const genarray = @import("genarray.zig");
+
 test {
-    std.testing.refAllDecls(@This());
+    // std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(genarray);
 }
