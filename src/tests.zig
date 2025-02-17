@@ -17,6 +17,5 @@ pub const signals = @import("signals.zig");
 pub const genarray = @import("genarray.zig");
 
 test {
-    // std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(genarray);
+    std.testing.refAllDecls(@This());
 }

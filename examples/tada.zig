@@ -135,9 +135,6 @@ pub fn main() !void {
     std.time.sleep(std.time.ns_per_ms * 3000);
 
     log.debug("ctx ticks:\t{}\n", .{graph_ctx.ticks()});
-
-    var str = std.ArrayList(u8).init(alloc);
-    try std.json.stringify(signal_graph.scratch, .{}, str.writer());
 }
 
 pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {
