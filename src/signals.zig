@@ -4,6 +4,8 @@ const testing = std.testing;
 const main = @import("main.zig");
 const dsp = @import("dsp/dsp.zig");
 
+const adj = @import("adjmatrix.zig");
+
 const GenArray = @import("genarray.zig").GenArray;
 
 const log = std.log.scoped(.signals);
@@ -115,8 +117,6 @@ pub const Options = struct {
 };
 
 // TODO: could be broken up
-// free-list/gen array could be its own little data structure
-// TODO: instead of just(?) a freelist, we could also just track "alive" flags on each element of our node_store, to ensure the data is available during iteration
 // TODO: parent context? Nesting graphs?
 pub fn Graph(comptime opts: Options) type {
     const SignalGenArr = GenArray(f32, opts.scratch_size);
@@ -173,91 +173,40 @@ pub fn Graph(comptime opts: Options) type {
             dest.* = val.*;
 
             ctx.buildProcessList() catch {
+                for (ctx.new_nodes.itemSlice()) |item| {
+                    std.log.err("{s}", .{item.id});
+                }
                 return Error.BadProcessList;
             };
         }
 
-        pub const AdjMatrix = [opts.max_node_count][opts.max_node_count]bool;
-
+        // TODO: do we really need the entire node count?
+        const AdjMatrix = [opts.max_node_count][opts.max_node_count]bool;
         pub fn getAdjMatrix(ctx: *Self) AdjMatrix {
-            // TODO: prolly something here to do with checking for alive nodes before processing
             const nodes = ctx.new_nodes.itemSlice();
-            var adj: AdjMatrix = std.mem.zeroes(AdjMatrix);
+            var adj_matrix = std.mem.zeroes(AdjMatrix);
 
-            for (nodes, 0..) |*node, idx| {
+            for (nodes, 0..) |node, idx| {
                 for (node.ins()) |in| {
                     if (in.field_ptr.* == .handle) {
                         const src_node_idx = ctx.scratch_source_map[in.field_ptr.*.handle.hdl.idx];
-                        adj[idx][src_node_idx] = true;
+                        adj_matrix[idx][src_node_idx] = true;
                     }
                 }
             }
 
-            return adj;
+            return adj_matrix;
         }
 
-        fn indegree(matrix: AdjMatrix, idx: usize) u8 {
-            var result: u8 = 0;
-            for (0..matrix.len) |i| {
-                if (matrix[idx][i]) {
-                    result += 1;
-                }
-            }
-            return result;
-        }
-
-        fn outdegree(matrix: AdjMatrix, idx: usize) u8 {
-            var result: u8 = 0;
-            for (0..matrix.len) |i| {
-                if (matrix[i][idx]) {
-                    result += 1;
-                }
-            }
-            return result;
-        }
-
-        fn printList(matrix: AdjMatrix, n: u8) void {
-            log.debug("List:\n", .{});
-
-            for (matrix[0..n]) |row| {
-                log.debug("{any}", .{row[0..n]});
-            }
-        }
-
-        // Builds a list of pointers for nodes in context store, sorted topographically via Kahn's algorithm.
-        // https://en.wikipedia.org/wiki/Topological_sorting
-        // TODO: omit unconnected nodes from processing?
+        // TODO: omit unconnected nodes from processing? What about non-alive/deleted nodes?
         pub fn buildProcessList(ctx: *Self) !void {
-            var node_index_queue = std.fifo.LinearFifo(u16, .{ .Static = opts.max_node_count }).init();
-            var adj_matrix: AdjMatrix = ctx.getAdjMatrix();
-            var processed_nodes: u8 = 0;
+            var mat: AdjMatrix = ctx.getAdjMatrix();
 
-            for (0..ctx.new_nodes.itemSlice().len) |idx| {
-                if (indegree(adj_matrix, idx) == 0) {
-                    try node_index_queue.writeItem(@intCast(idx));
-                }
-            }
+            log.debug("building list", .{});
 
-            while (node_index_queue.readItem()) |queued_idx| {
-                ctx.node_process_list[processed_nodes] = queued_idx;
-                processed_nodes += 1;
+            var queue_buf: [opts.max_node_count]u16 = undefined;
 
-                // remove processed node from list
-                for (0..adj_matrix.len) |idx| {
-                    if (adj_matrix[idx][queued_idx]) {
-                        adj_matrix[idx][queued_idx] = false;
-                        if (indegree(adj_matrix, idx) == 0) {
-                            try node_index_queue.writeItem(@intCast(idx));
-                        }
-                    }
-                }
-            }
-
-            if (processed_nodes < ctx.new_nodes.len) {
-                log.debug("uh oh, somethings up. Likely cycle found.\n", .{});
-                log.debug("node count: {}\tprocessed nodes:{}\n", .{ ctx.new_nodes.len, processed_nodes });
-                return Error.BadProcessList;
-            }
+            try adj.topographicList(&mat, ctx.new_nodes.len, &ctx.node_process_list, queue_buf[0..ctx.new_nodes.len]);
         }
 
         pub fn printNodeList(ctx: *Self) void {

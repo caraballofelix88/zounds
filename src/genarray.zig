@@ -133,6 +133,16 @@ pub fn GenArray(comptime T: type, comptime capacity: u16) type {
         pub fn itemSlice(g: *Self) []T {
             return g.items[0..g.len];
         }
+
+        pub fn liveLen(g: Self) u16 {
+            return g.len - g.free_list;
+        }
+
+        // NEXT: we cant do any real operations on our lists without this
+        // Consider keeping 2 lists of indices, for live and dead entries?
+        pub fn iteratorForAliveEntries(g: *Self) []T {
+            _ = g;
+        }
     };
 }
 
