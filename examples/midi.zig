@@ -223,7 +223,7 @@ pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
 
-    const config = zounds.ContextConfig{
+    const config = zounds.backend_context.ContextConfig{
         .desired_format = .{
             .sample_format = .f32,
             .sample_rate = 44_100,

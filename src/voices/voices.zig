@@ -1,7 +1,8 @@
 const std = @import("std");
 const dsp = @import("../dsp/dsp.zig");
 const signals = @import("../signals.zig");
-const main = @import("../main.zig");
+
+const fmt = @import("../audio_format.zig");
 
 const log = std.log.scoped(.voices);
 
@@ -10,7 +11,7 @@ const VoiceOpts = struct {
     pitch: f32 = 50.0,
     amp: f32 = 1.0,
     trigger: signals.Signal = .{ .static = 0.0 },
-    format: main.FormatData,
+    format: fmt.FormatData,
     id: []const u8,
 };
 

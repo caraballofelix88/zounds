@@ -1,24 +1,25 @@
 const std = @import("std");
-const main = @import("../main.zig");
+const z = @import("../root.zig");
+const backend_context = @import("../context.zig");
 const backends = @import("backends.zig");
 
-pub const dummy_device = main.Device{
+pub const dummy_device = z.Device{
     .id = "dummy_device",
     .name = "Dummy Device",
     .channels = undefined,
-    .formats = std.meta.tags(main.SampleFormat),
+    .formats = std.meta.tags(z.SampleFormat),
     .sample_rate = 44_100,
 };
 
 pub const Context = struct {
     alloc: std.mem.Allocator,
-    device_list: std.ArrayListUnmanaged(main.Device),
+    device_list: std.ArrayListUnmanaged(z.Device),
 
-    pub fn init(allocator: std.mem.Allocator, config: main.ContextConfig) !backends.Context {
+    pub fn init(allocator: std.mem.Allocator, config: backend_context.ContextConfig) !backends.Context {
         _ = config;
         const ctx = try allocator.create(Context);
 
-        ctx.* = .{ .alloc = allocator, .device_list = .{ .items = undefined } };
+        ctx.* = .{ .alloc = allocator, .device_list = .empty };
 
         return .{ .dummy = ctx };
     }
@@ -33,15 +34,15 @@ pub const Context = struct {
         _ = ctx;
     }
 
-    pub fn devices(ctx: Context) []const main.Device {
+    pub fn devices(ctx: Context) []const z.Device {
         return ctx.device_list.items;
     }
 
-    pub fn defaultDevice(ctx: Context) ?main.Device {
+    pub fn defaultDevice(ctx: Context) ?z.Device {
         return ctx.device_list.items[0];
     }
 
-    pub fn createPlayer(ctx: *Context, device: main.Device, writeFn: main.WriteFn, options: main.StreamOptions) !backends.Player {
+    pub fn createPlayer(ctx: *Context, device: z.Device, writeFn: z.WriteFn, options: z.StreamOptions) !backends.Player {
         _ = device;
         _ = writeFn;
         _ = options;
@@ -60,7 +61,7 @@ pub const Context = struct {
     pub fn renderCallback(refPtr: ?*anyopaque, buf: []u8, num_frames: usize) void {
         const player: *Player = @ptrCast(@alignCast(refPtr));
 
-        const writeFn: main.WriteFn = player.writeFn;
+        const writeFn: z.WriteFn = player.writeFn;
 
         writeFn(player.write_ref, buf[0 .. num_frames * player.ctx.format.frameSize()], num_frames);
     }

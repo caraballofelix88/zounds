@@ -5,3 +5,6 @@ zig-out
 .DS_Store
 imgui.ini
 debug.plist
+notes
+# AI-generated CoreAudio reference file
+ca_bindings.reference.zig

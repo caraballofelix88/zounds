@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const main = @import("main.zig");
+const fmt = @import("audio_format.zig");
 const dsp = @import("dsp/dsp.zig");
 
 const adj = @import("adjmatrix.zig");
@@ -54,7 +54,7 @@ pub const GraphContext = struct {
         // std.debug.assert(T == .Pointer);
 
         // TODO: assert type has process function with compatible signature
-        const ChildType = T.Pointer.child;
+        const ChildType = T.pointer.child;
 
         const node = Node.init(node_ptr, ChildType);
 
@@ -128,8 +128,8 @@ pub fn Graph(comptime opts: Options) type {
         scratch_source_map: [opts.scratch_size]u16 = std.mem.zeroes([opts.scratch_size]u16),
         node_process_list: [opts.max_node_count]u16 = undefined,
         root_signal: Signal = .{ .static = 0.0 },
-        format: main.FormatData,
-        ticks: u64 = 0,
+        format: fmt.FormatData,
+        _ticks: u64 = 0,
 
         ctx: ?GraphContext = null,
 
@@ -239,7 +239,7 @@ pub fn Graph(comptime opts: Options) type {
             process(ptr);
 
             // tick counter
-            ctx.ticks += 1;
+            ctx._ticks += 1;
 
             // for now, take single output val and dupe to every channel
             const val = std.math.clamp(ctx.root_signal.get(), -1.0, 1.0);
@@ -259,7 +259,7 @@ pub fn Graph(comptime opts: Options) type {
                 return Error.NoMoreNodeSpace;
             };
 
-            const node_handle = .{
+            const node_handle: Handle = .{
                 .tag = .node,
                 .idx = node_hdl.idx,
                 .gen = node_hdl.gen,
@@ -374,7 +374,7 @@ pub fn Graph(comptime opts: Options) type {
 
         fn ticks(ptr: *anyopaque) u64 {
             const self: *Self = @ptrCast(@alignCast(ptr));
-            return self.ticks;
+            return self._ticks;
         }
 
         fn root(ptr: *anyopaque) *Signal {
@@ -515,7 +515,7 @@ pub fn Ports(comptime T: anytype) type {
 
     const FieldEnum = std.meta.FieldEnum(T);
 
-    const fields = @typeInfo(T).Struct.fields;
+    const fields = @typeInfo(T).@"struct".fields;
 
     const in_count = comptime blk: {
         var idx = 0;
@@ -584,7 +584,7 @@ pub fn Ports(comptime T: anytype) type {
                 switch (info.type) {
                     DirSignal(.in) => {
                         var outer_field = &@field(t, @tagName(port));
-                        const default_val: Signal = @as(*const DirSignal(.in), @ptrCast(@alignCast(&info.default_value.?.*))).val;
+                        const default_val: Signal = @as(*const DirSignal(.in), @ptrCast(@alignCast(&info.defaultValue().?.*))).val;
 
                         buf[idx] = .{
                             .field_ptr = &@field(outer_field, "val"),
@@ -593,7 +593,7 @@ pub fn Ports(comptime T: anytype) type {
                         };
                     },
                     Signal => {
-                        const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                        const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value_ptr orelse &default_signal)));
                         buf[idx] = .{
                             .field_ptr = &@field(t, @tagName(port)),
                             .name = info.name,
@@ -617,7 +617,7 @@ pub fn Ports(comptime T: anytype) type {
                 switch (info.type) {
                     DirSignal(.out) => {
                         var outer_field = &@field(t, @tagName(port));
-                        const default_val: Signal = @as(*const DirSignal(.out), @ptrCast(@alignCast(&info.default_value.?.*))).val;
+                        const default_val: Signal = @as(*const DirSignal(.out), @ptrCast(@alignCast(&info.defaultValue().?.*))).val;
 
                         buf[idx] = .{
                             .field_ptr = &@field(outer_field, "val"),
@@ -627,7 +627,7 @@ pub fn Ports(comptime T: anytype) type {
                     },
 
                     Signal => {
-                        const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                        const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value_ptr orelse &default_signal)));
                         buf[idx] = .{
                             .field_ptr = &@field(t, @tagName(port)),
                             .name = info.name,
@@ -663,7 +663,7 @@ pub fn Ports(comptime T: anytype) type {
                         DirSignal(.out) => {
                             var outer_field = &@field(t, @tagName(port));
 
-                            const default_val: Signal = @as(*const DirSignal(.out), @ptrCast(@alignCast(&info.default_value.?.*))).val;
+                            const default_val: Signal = @as(*const DirSignal(.out), @ptrCast(@alignCast(&info.defaultValue().?.*))).val;
 
                             return .{
                                 .field_ptr = &@field(outer_field, "val"),
@@ -673,7 +673,7 @@ pub fn Ports(comptime T: anytype) type {
                         },
 
                         Signal => {
-                            const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value orelse &default_signal)));
+                            const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value_ptr orelse &default_signal)));
                             return .{
                                 .field_ptr = &@field(t, @tagName(port)),
                                 .name = info.name,

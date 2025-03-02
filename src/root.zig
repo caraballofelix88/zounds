@@ -1,25 +1,26 @@
 const std = @import("std");
 const testing = std.testing;
-pub const utils = @import("utils.zig");
+
+pub const backends = @import("backends/backends.zig");
+pub const Backend = backends.Backend;
+pub const coreaudio = @import("backends/coreaudio.zig");
+pub const dsp = @import("dsp/dsp.zig");
 pub const envelope = @import("envelope.zig");
-pub const signals = @import("signals.zig");
+pub const fmt = @import("audio_format.zig");
 pub const midi = @import("midi.zig");
 pub const readers = @import("readers/readers.zig");
-pub const backends = @import("backends/backends.zig");
-pub const dsp = @import("dsp/dsp.zig");
-pub const wavegen = @import("wavegen.zig");
+pub const signals = @import("signals.zig");
+pub const utils = @import("utils.zig");
 pub const voices = @import("voices/voices.zig");
+pub const wavegen = @import("wavegen.zig");
+pub const backend_context = @import("context.zig");
 
 // TODO: midi client backends
-pub const coreaudio = @import("backends/coreaudio.zig");
-
-pub const Backend = backends.Backend;
-
 pub const Context = struct {
     alloc: std.mem.Allocator,
     backend: backends.Context,
 
-    pub fn init(comptime backend: ?Backend, allocator: std.mem.Allocator, config: ContextConfig) !Context {
+    pub fn init(comptime backend: ?Backend, allocator: std.mem.Allocator, config: backend_context.ContextConfig) !Context {
         const backend_ctx: backends.Context = blk: {
             if (backend) |b| {
                 break :blk try @typeInfo(
@@ -29,9 +30,10 @@ pub const Context = struct {
             // TODO: iterate through list of available backends if not specified
             else {
                 inline for (std.meta.fields(Backend), 0..) |b, i| {
-                    if (@typeInfo(
+                    const backend_type = @typeInfo(
                         std.meta.fieldInfo(backends.Context, @as(Backend, @enumFromInt(b.value))).type,
-                    ).Pointer.child.init(allocator, config)) |d| {
+                    );
+                    if (backend_type.pointer.child.init(allocator, config)) |d| {
                         break :blk d;
                     } else |err| {
                         if (i == std.meta.fields(Backend).len - 1)
@@ -97,96 +99,15 @@ pub const Player = struct {
     }
 };
 
-pub const SampleFormat = enum {
-    f32,
-    i16,
-
-    pub fn size(fmt: SampleFormat) u8 {
-        return bitSize(fmt) / 8;
-    }
-
-    pub fn bitSize(fmt: SampleFormat) u8 {
-        return switch (fmt) {
-            .f32 => 32,
-            .i16 => 16,
-        };
-    }
-
-    pub fn fmtType(comptime fmt: SampleFormat) type {
-        return switch (fmt) {
-            .f32 => f32,
-            .i16 => i16,
-        };
-    }
-};
-
-pub const FormatData = struct {
-    sample_format: SampleFormat,
-    channels: []const ChannelPosition,
-    sample_rate: u32,
-    is_interleaved: bool = true, // channel samples interleaved?
-
-    pub fn frameSize(f: FormatData) usize {
-        return f.sample_format.size() * f.channels.len;
-    }
-
-    pub fn invSampleRate(f: FormatData) f32 {
-        return 1.0 / @as(f32, @floatFromInt(f.sample_rate));
-    }
-};
-
-pub const AudioBuffer = struct {
-    format: FormatData,
-    buf: []const u8,
-
-    pub fn sampleCount(b: AudioBuffer) usize {
-        return b.buf.len / b.format.sample_format.size();
-    }
-
-    pub fn frameCount(b: AudioBuffer) usize {
-        return b.buf.len / b.format.frameSize();
-    }
-
-    pub fn trackLength(b: AudioBuffer) usize { // in seconds
-        return b.sampleCount() / b.format.sample_rate;
-    }
-};
-
-pub const ContextConfig = struct {
-    desired_format: FormatData,
-    frames_per_packet: u8, // TODO: this is more of a stream option concern
-};
-
-pub const ChannelPosition = enum {
-    left,
-    right,
-
-    pub const mono: [1]ChannelPosition = .{.left};
-    pub const stereo: [2]ChannelPosition = .{ .left, .right };
-
-    pub fn fromChannelCount(count: usize) []const ChannelPosition {
-        return switch (count) {
-            1 => &mono,
-            2 => &stereo,
-            else => &mono,
-        };
-    }
-};
-
-test "ChannelPosition.fromChannelCount" {
-    try testing.expectEqualSlices(ChannelPosition, &.{.left}, ChannelPosition.fromChannelCount(1));
-    try testing.expectEqualSlices(ChannelPosition, &.{ .left, .right }, ChannelPosition.fromChannelCount(2));
-}
-
 pub const MidiClientContext = struct {};
 
 // Audio input/output (output TK)
 pub const Device = struct {
     id: []const u8,
     name: []const u8,
-    channels: []const ChannelPosition,
+    channels: []const fmt.ChannelPosition,
     sample_rate: u24,
-    formats: []const SampleFormat,
+    formats: []const fmt.SampleFormat,
     alloc: ?std.mem.Allocator = null,
 
     pub fn deinit(device: *Device) void {
@@ -198,7 +119,7 @@ pub const Device = struct {
 };
 
 pub const StreamOptions = struct {
-    format: FormatData,
+    format: fmt.FormatData,
     write_ref: *anyopaque,
 };
 

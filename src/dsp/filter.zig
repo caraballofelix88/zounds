@@ -1,6 +1,5 @@
 const std = @import("std");
 const signals = @import("../signals.zig");
-const main = @import("../main.zig");
 
 // resources:
 // - https://www.w3.org/TR/audio-eq-cookbook/

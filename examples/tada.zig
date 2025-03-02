@@ -1,23 +1,24 @@
 const std = @import("std");
 const zounds = @import("zounds");
 
+const fmt = zounds.fmt;
+
 const Signal = zounds.signals.Signal;
 const Node = zounds.signals.Node;
 
 const log = std.log.scoped(.examples_tada);
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
+pub fn main(init_data: std.process.Init) !void {
+    const alloc = init_data.gpa;
 
-    const format: zounds.FormatData = .{
+    const format: fmt.FormatData = .{
         .sample_format = .f32,
         .sample_rate = 44_100,
-        .channels = zounds.ChannelPosition.fromChannelCount(2),
+        .channels = fmt.ChannelPosition.fromChannelCount(2),
         .is_interleaved = true,
     };
 
-    const config = zounds.ContextConfig{ .frames_per_packet = 1, .desired_format = format };
+    const config = zounds.backend_context.ContextConfig{ .frames_per_packet = 1, .desired_format = format };
 
     var signal_graph = zounds.signals.Graph(.{ .channel_count = 2 }){ .format = config.desired_format };
     var graph_ctx = signal_graph.context();
@@ -102,7 +103,7 @@ pub fn main() !void {
 
     const device: zounds.Device = .{
         .sample_rate = 44_100,
-        .channels = zounds.ChannelPosition.fromChannelCount(2),
+        .channels = fmt.ChannelPosition.fromChannelCount(2),
         .id = "fake_device",
         .name = "Fake Device",
         .formats = &.{},
@@ -119,20 +120,24 @@ pub fn main() !void {
 
     player.play();
 
-    std.time.sleep(std.time.ns_per_ms * 500);
+    // std.time.sleep(std.time.ns_per_ms * 500);
+    try std.Io.sleep(init_data.io, .fromMilliseconds(500), .real);
 
     // ta
     trigger = 1.0;
     log.debug("ta", .{});
-    std.time.sleep(std.time.ns_per_ms * 180);
+    // std.time.sleep(std.time.ns_per_ms * 180);
+    try std.Io.sleep(init_data.io, .fromMilliseconds(180), .real);
 
     trigger = 0.0;
-    std.time.sleep(std.time.ns_per_ms * 50);
+    // std.time.sleep(std.time.ns_per_ms * 50);
+    try std.Io.sleep(init_data.io, .fromMilliseconds(50), .real);
 
     // dah~
     trigger = 1.0;
     log.debug("-dah~\n", .{});
-    std.time.sleep(std.time.ns_per_ms * 3000);
+    // std.time.sleep(std.time.ns_per_ms * 3000);
+    try std.Io.sleep(init_data.io, .fromMilliseconds(3000), .real);
 
     log.debug("ctx ticks:\t{}\n", .{graph_ctx.ticks()});
 }

@@ -4,6 +4,8 @@ const log = std.log.scoped(.adjmatrix);
 
 pub const Error = error{BadTopographicList};
 
+// TODO: it's probably better to do a single [N * M] array instead of
+// N arrays of size M
 fn AdjMatrix(size: u16) type {
     return [size][size]f32;
 }
@@ -29,23 +31,23 @@ pub fn outdegree(mat: anytype, size: u16, idx: u16) u16 {
 }
 
 pub fn topographicList(mat: anytype, size: u16, ret: []u16, queue_buf: []u16) !void {
-    var queue = std.fifo.LinearFifo(u16, .Slice).init(queue_buf);
+    var queue: std.Deque(u16) = .initBuffer(queue_buf);
     var processed: u16 = 0;
 
     for (0..size) |idx| {
         if (indegree(mat, size, @intCast(idx)) == 0) {
-            try queue.writeItem(@intCast(idx));
+            try queue.pushBackBounded(@intCast(idx));
         }
     }
 
-    while (queue.readItem()) |visited_idx| {
+    while (queue.popFront()) |visited_idx| {
         ret[processed] = visited_idx;
         processed += 1;
         for (0..size) |idx| {
             if (mat[idx][visited_idx]) {
                 mat[idx][visited_idx] = false;
                 if (indegree(mat, size, @intCast(idx)) == 0) {
-                    try queue.writeItem(@intCast(idx));
+                    try queue.pushBackBounded(@intCast(idx));
                 }
             }
         }

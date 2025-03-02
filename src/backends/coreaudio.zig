@@ -1,8 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
-const c = @import("compat.zig");
+const c = @import("./coreaudio_c.zig");
 
-const main = @import("../main.zig");
+const root = @import("../root.zig");
+const fmt = @import("../audio_format.zig");
+const backend_context = @import("../context.zig");
 const utils = @import("../utils.zig");
 const midi = @import("../midi.zig");
 const backends = @import("backends.zig");
@@ -22,10 +24,10 @@ const DeviceState = enum {
 pub const Context = struct {
     alloc: std.mem.Allocator,
     audioUnit: c.AudioUnit,
-    devices: []main.Device,
-    format: main.FormatData,
+    devices: []root.Device,
+    format: fmt.FormatData,
 
-    pub fn init(allocator: std.mem.Allocator, config: main.ContextConfig) !backends.Context {
+    pub fn init(allocator: std.mem.Allocator, config: backend_context.ContextConfig) !backends.Context {
         var acd = c.AudioComponentDescription{
             .componentType = c.kAudioUnitType_Output,
             .componentSubType = c.kAudioUnitSubType_DefaultOutput,
@@ -84,14 +86,22 @@ pub const Context = struct {
         _ = ctx;
     }
 
-    pub fn renderCallback(ref_ptr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.C) c.OSStatus {
+    pub fn renderCallback(ref_ptr: ?*anyopaque, au_render_flags: [*c]c.AudioUnitRenderActionFlags, timestamp: [*c]const c.AudioTimeStamp, bus_number: c_uint, num_frames: c_uint, buffer_list: [*c]c.AudioBufferList) callconv(.c) c.OSStatus {
         _ = au_render_flags;
         _ = timestamp;
         _ = bus_number;
 
         const player: *Player = @ptrCast(@alignCast(ref_ptr));
-        const writeFn: main.WriteFn = player.writeFn;
-        const buf: [*]u8 = @ptrCast(@alignCast(buffer_list.?.*.mBuffers[0].mData));
+        const writeFn: root.WriteFn = player.writeFn;
+
+        // NOTE: seemingly theres a bug in the 0.16 compiler that produces unexpected
+        // results when dereferencing a [*c] ptr. Stumbled on this with Claude.
+        //
+        // In this case, trying to access buffers_list.*.mBuffers[0].mData would fail
+        // to compile, even though its structurally identical. The array index on the
+        // mBuffers resolves to result type [1]AudioBuffer instead of AudioBuffer.
+        const buffers = buffer_list.*.mBuffers;
+        const buf: [*]u8 = @ptrCast(@alignCast(buffers[0].mData));
 
         writeFn(player.write_ref, buf[0 .. num_frames * player.ctx.format.frameSize()], num_frames);
 
@@ -100,7 +110,7 @@ pub const Context = struct {
 
     pub fn refresh() void {} // TODO: list available devices here
 
-    pub fn createPlayer(ctx: *Context, device: main.Device, writeFn: main.WriteFn, options: main.StreamOptions) !backends.Player {
+    pub fn createPlayer(ctx: *Context, device: root.Device, writeFn: root.WriteFn, options: root.StreamOptions) !backends.Player {
         const player = try ctx.alloc.create(Player);
 
         _ = device;
@@ -142,7 +152,7 @@ pub const Context = struct {
     }
 };
 
-fn getOutputDevices(alloc: std.mem.Allocator) ![]main.Device {
+fn getOutputDevices(alloc: std.mem.Allocator) ![]root.Device {
     const device_property_address = c.AudioObjectPropertyAddress{
         .mSelector = c.kAudioHardwarePropertyDevices,
         .mScope = c.kAudioObjectPropertyScopeOutput,
@@ -168,7 +178,7 @@ fn getOutputDevices(alloc: std.mem.Allocator) ![]main.Device {
         log.debug("error getting device ids: {}", .{err});
     };
 
-    var device_list = std.ArrayList(main.Device).init(alloc);
+    var device_list: std.array_list.Managed(root.Device) = .init(alloc);
 
     for (device_ids) |device_id| {
 
@@ -212,11 +222,11 @@ fn getOutputDevices(alloc: std.mem.Allocator) ![]main.Device {
         );
 
         const placeholder_id = "NotReal";
-        const device: main.Device = .{
+        const device: root.Device = .{
             .id = &placeholder_id.*,
             .name = name,
-            .formats = &.{main.SampleFormat.f32},
-            .channels = main.ChannelPosition.fromChannelCount(2),
+            .formats = &.{fmt.SampleFormat.f32},
+            .channels = fmt.ChannelPosition.fromChannelCount(2),
             .sample_rate = 44_100,
             .alloc = alloc,
         };
@@ -231,9 +241,9 @@ pub const Player = struct {
     alloc: std.mem.Allocator,
     audio_unit: c.AudioUnit,
     ctx: *const Context,
-    volume: f32 = 0.5,
+    // volume: f32 = 0.5,
     is_playing: bool,
-    writeFn: main.WriteFn,
+    writeFn: root.WriteFn,
     write_ref: *anyopaque,
 
     fn init() void {}
@@ -315,12 +325,12 @@ fn osStatusHandler(result: c.OSStatus) !void {
 test "basic check for leaks" {
     const alloc = std.testing.allocator;
 
-    const config = main.ContextConfig{
+    const config = backend_context.ContextConfig{
         .frames_per_packet = 1,
         .desired_format = .{
             .sample_format = .f32,
             .sample_rate = 44_100,
-            .channels = main.ChannelPosition.fromChannelCount(2),
+            .channels = fmt.ChannelPosition.fromChannelCount(2),
             .is_interleaved = true,
         },
     };

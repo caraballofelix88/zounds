@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const main = @import("main.zig");
+pub const z = @import("../root.zig");
 
 // envelopes, ramps
 pub const envelope = @import("envelope.zig");

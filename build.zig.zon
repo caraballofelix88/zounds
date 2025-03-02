@@ -1,6 +1,8 @@
 .{
-    .name = "zounds",
+    .name = .zounds,
+    .fingerprint = 0xd62c5739646c1fc8,
     .version = "0.0.1",
+    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",

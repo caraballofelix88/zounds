@@ -5,7 +5,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    const config = zounds.ContextConfig{
+    const config = zounds.backend_context.ContextConfig{
         .frames_per_packet = 1,
         .desired_format = .{
             .sample_format = .f32,

@@ -1,13 +1,13 @@
 const std = @import("std");
 const signals = @import("../signals.zig");
-const main = @import("../main.zig");
+const AudioBuffer = @import("../audio_buffer.zig");
 
 pub const BufferPlayback = struct {
     ctx: *const signals.GraphContext,
     id: []const u8 = "BufferPlayback",
     head: usize = 0,
     head_inc_counter: usize = 0,
-    buf: main.AudioBuffer,
+    buf: AudioBuffer,
 
     should_loop: bool = true,
 

@@ -1,8 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
 
-const main = @import("../main.zig");
 const convert = @import("../convert.zig");
+const fmt = @import("../audio_format.zig");
+
+const AudioBuffer = @import("../audio_buffer.zig");
 
 // reference: http://soundfile.sapp.org/doc/WaveFormat/
 
@@ -12,7 +14,7 @@ pub const WavFileData = struct {
     byte_rate: u32,
     block_align: u16,
     bits_per_sample: u16,
-    format: main.FormatData,
+    format: fmt.FormatData,
 };
 
 // pub const Field = struct { name: []u8, size_bytes: u8, field_type: type, is_big_endian: bool = false, optional: bool = false };
@@ -40,7 +42,7 @@ pub const WavFileData = struct {
 // TODO: maybe generalize file header parsing
 // Perhaps follow through with the "Field" stuff above?
 // NOTE: duplicates input data, doesn't own the incoming slice
-pub fn readWav(alloc: std.mem.Allocator, data: []const u8) !main.AudioBuffer {
+pub fn readWav(alloc: std.mem.Allocator, data: []const u8) !AudioBuffer {
     var buffer = std.io.fixedBufferStream(data);
     const reader = buffer.reader();
 
@@ -94,9 +96,9 @@ pub fn readWav(alloc: std.mem.Allocator, data: []const u8) !main.AudioBuffer {
     const slice = try reader.readAllAlloc(alloc, std.math.maxInt(usize));
     defer alloc.free(slice);
 
-    var base_buffer: main.AudioBuffer = .{
+    var base_buffer: AudioBuffer = .{
         .format = .{
-            .channels = main.ChannelPosition.fromChannelCount(num_channels),
+            .channels = fmt.ChannelPosition.fromChannelCount(num_channels),
             .sample_rate = sample_rate,
             .sample_format = .i16,
         },
@@ -117,7 +119,7 @@ pub fn readWav(alloc: std.mem.Allocator, data: []const u8) !main.AudioBuffer {
     return base_buffer;
 }
 
-pub fn readWavFile(alloc: std.mem.Allocator, dir: []const u8) !main.AudioBuffer {
+pub fn readWavFile(alloc: std.mem.Allocator, dir: []const u8) AudioBuffer {
     var file = try std.fs.cwd().openFile(dir, .{});
     defer file.close();
 

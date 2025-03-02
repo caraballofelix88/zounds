@@ -16,22 +16,20 @@ pub fn build(b: *std.Build) void {
     var exe_path_buf: [128]u8 = undefined;
     const exe_path = std.fmt.bufPrint(&exe_path_buf, "examples/{s}.zig", .{example_name}) catch "examples/diy_node.zig";
 
-    const mod = b.addModule("zounds", .{ .root_source_file = .{
-        .src_path = .{ .owner = b, .sub_path = "src/main.zig" },
-    } });
+    const mod = b.addModule("zounds", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    linkPlatformFrameworks(target, mod);
 
     //
     // Lib
     //
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addLibrary(.{
         .name = "zounds",
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } },
-        .target = target,
-        .optimize = optimize,
+        .root_module = mod,
     });
-
-    lib.root_module.addImport("zounds", mod);
-    linkPlatformFrameworks(target, lib);
 
     const lib_install = b.addInstallArtifact(lib, .{});
     lib_install.step.dependOn(b.getInstallStep());
@@ -39,44 +37,44 @@ pub fn build(b: *std.Build) void {
     //
     // Example exe
     //
-    const exe = b.addExecutable(.{
-        .name = example_name,
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = exe_path } },
+    const exe_mod = b.addModule(exe_path, .{
+        .root_source_file = b.path(exe_path),
+        .imports = &.{.{ .name = "zounds", .module = mod }},
         .target = target,
         .optimize = optimize,
     });
+    // linkPlatformFrameworks(target, exe_mod);
 
-    exe.root_module.addImport("zounds", mod);
-    linkPlatformFrameworks(target, exe);
+    const exe = b.addExecutable(.{
+        .name = example_name,
+        .root_module = exe_mod,
+    });
 
-    const install_exe = b.addInstallArtifact(exe, .{});
+    b.installArtifact(exe);
+
     const run_exe = b.addRunArtifact(exe);
-
-    run_exe.step.dependOn(&install_exe.step);
 
     //
     // Check executable build
     //
-    const check_exe = b.addExecutable(.{
-        .name = example_name,
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = exe_path } },
-        .target = target,
-        .optimize = optimize,
-    });
-    check_exe.root_module.addImport("zounds", mod);
-    linkPlatformFrameworks(target, check_exe);
+    // const check_exe = b.addExecutable(.{
+    //     .name = example_name,
+    //     .root_module = exe_mod,
+    // });
 
     //
     // Test executable
     //
-    const main_tests = b.addTest(.{
-        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/tests.zig" } },
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
     });
+    linkPlatformFrameworks(target, test_mod);
 
-    main_tests.root_module.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } });
-    linkPlatformFrameworks(target, main_tests);
+    const main_tests = b.addTest(.{
+        .root_module = test_mod,
+    });
 
     const run_main_tests = b.addRunArtifact(main_tests);
 
@@ -97,17 +95,17 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "run example");
     run_step.dependOn(&run_exe.step);
 
-    const check_step = b.step("check", "compile without emitting for diagnostics");
-    check_step.dependOn(&check_exe.step);
+    // const check_step = b.step("check", "compile without emitting for diagnostics");
+    // check_step.dependOn(&check_exe.step);
 }
 
-pub fn linkPlatformFrameworks(target: std.Build.ResolvedTarget, step: *std.Build.Step.Compile) void {
+pub fn linkPlatformFrameworks(target: std.Build.ResolvedTarget, mod: *std.Build.Module) void {
     switch (target.result.os.tag) {
         .ios, .macos => {
-            step.linkFramework("CoreFoundation");
-            step.linkFramework("CoreAudio");
-            step.linkFramework("AudioToolbox");
-            step.linkFramework("CoreMidi");
+            mod.linkFramework("CoreFoundation", .{});
+            mod.linkFramework("CoreAudio", .{});
+            mod.linkFramework("AudioToolbox", .{});
+            mod.linkFramework("CoreMidi", .{});
         },
         else => {},
     }

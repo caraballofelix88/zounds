@@ -12,14 +12,15 @@ pub const Error = error{
 pub fn GenArray(comptime T: type, comptime capacity: u16) type {
     const Generation = u8;
     const Index = u16;
-    const Fifo = std.fifo.LinearFifo(Index, .{ .Static = capacity });
+    const Queue = std.Deque(Index);
 
     return struct {
         items: [capacity]T = undefined,
         gens: [capacity]Generation = [_]Generation{0} ** capacity,
         // TODO: test
         is_alive: [capacity]bool = [_]bool{false} ** capacity,
-        free_list: Fifo = Fifo.init(),
+        free_list_buf: [capacity]Index = undefined,
+        free_list: Queue = .empty,
         len: Index = 0,
 
         pub const Handle = struct {
@@ -28,6 +29,10 @@ pub fn GenArray(comptime T: type, comptime capacity: u16) type {
         };
 
         pub const Self = @This();
+
+        pub fn init(self: *Self) void {
+            self.free_list = .initBuffer(self.free_list_buf);
+        }
 
         inline fn isValidHandle(g: *Self, hdl: Handle) bool {
             return g.gens[hdl.idx] <= hdl.gen;
@@ -42,7 +47,7 @@ pub fn GenArray(comptime T: type, comptime capacity: u16) type {
             var recycled = false;
             var next_spot = g.len;
 
-            if (g.free_list.readItem()) |free_spot| {
+            if (g.free_list.popFront()) |free_spot| {
                 recycled = true;
                 next_spot = free_spot;
             } else {
@@ -81,7 +86,7 @@ pub fn GenArray(comptime T: type, comptime capacity: u16) type {
             // TODO: generation needs to account for max representable number
             g.gens[hdl.idx] += 1;
             g.is_alive[hdl.idx] = false;
-            _ = try g.free_list.writeItem(hdl.idx);
+            _ = try g.free_list.pushFrontBounded(hdl.idx);
         }
 
         pub fn put(g: *Self, hdl: Handle, val: T) !void {
@@ -126,7 +131,7 @@ pub fn GenArray(comptime T: type, comptime capacity: u16) type {
             g.len = 0;
             g.gens = [_]u8{0} ** capacity;
             g.is_alive = [_]bool{false} ** capacity;
-            g.free_list.discard(capacity);
+            g.free_list.len = 0; // not sure if this clears as expected, we'll see
         }
 
         // TODO: rename
@@ -135,7 +140,7 @@ pub fn GenArray(comptime T: type, comptime capacity: u16) type {
         }
 
         pub fn liveLen(g: Self) u16 {
-            return g.len - g.free_list;
+            return g.len - g.free_list.len;
         }
 
         // NEXT: we cant do any real operations on our lists without this
@@ -147,7 +152,7 @@ pub fn GenArray(comptime T: type, comptime capacity: u16) type {
 }
 
 test "Genarray" {
-    var garr = GenArray(u16, 8){};
+    var garr: GenArray(u16, 8) = .init();
 
     _ = try garr.push(1);
     const a = try garr.push(2);
