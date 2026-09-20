@@ -2,7 +2,7 @@ const std = @import("std");
 const signals = @import("signals.zig");
 const testing = std.testing;
 
-// amazing reference for MIDI spec: http://www.somascape.org/midi/tech/spec.html
+// amazing reference for MIDI 1.0 spec: http://www.somascape.org/midi/tech/spec.html
 
 // TODO: keep abusing tagged unions? Some kinds could use addl data
 pub const Kind = enum {
