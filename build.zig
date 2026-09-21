@@ -57,10 +57,10 @@ pub fn build(b: *std.Build) void {
     //
     // Check executable build
     //
-    // const check_exe = b.addExecutable(.{
-    //     .name = example_name,
-    //     .root_module = exe_mod,
-    // });
+    const check_exe = b.addExecutable(.{
+        .name = example_name,
+        .root_module = exe_mod,
+    });
 
     //
     // Test executable
@@ -95,8 +95,9 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "run example");
     run_step.dependOn(&run_exe.step);
 
-    // const check_step = b.step("check", "compile without emitting for diagnostics");
-    // check_step.dependOn(&check_exe.step);
+    const check_step = b.step("check", "compile without emitting for diagnostics");
+    check_step.dependOn(&check_exe.step);
+    check_step.dependOn(&main_tests.step);
 }
 
 pub fn linkPlatformFrameworks(target: std.Build.ResolvedTarget, mod: *std.Build.Module) void {
