@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
     ) orelse "tada";
 
     var exe_path_buf: [128]u8 = undefined;
-    const exe_path = std.fmt.bufPrint(&exe_path_buf, "examples/{s}.zig", .{example_name}) catch "examples/tada.zig";
+    const exe_path = std.fmt.bufPrint(&exe_path_buf, "examples/{s}.zig", .{example_name}) catch "examples/wav_playback.zig";
 
     const mod = b.addModule("zounds", .{
         .root_source_file = b.path("src/root.zig"),
@@ -22,17 +22,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     linkPlatformFrameworks(target, mod);
-
-    //
-    // Lib
-    //
-    const lib = b.addLibrary(.{
-        .name = "zounds",
-        .root_module = mod,
-    });
-
-    const lib_install = b.addInstallArtifact(lib, .{});
-    lib_install.step.dependOn(b.getInstallStep());
 
     //
     // Example exe

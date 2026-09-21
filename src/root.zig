@@ -14,6 +14,7 @@ pub const voices = @import("voices/voices.zig");
 pub const wavegen = @import("wavegen.zig");
 pub const backend_context = @import("context.zig");
 
+// TODO: organize root exports a little bit
 const old_signals = @import("signals.zig");
 pub const Node = old_signals.Node;
 pub const Graph = old_signals.Graph;

@@ -1,24 +1,20 @@
 const std = @import("std");
 const zounds = @import("zounds");
 
-const Signal = zounds.signals.Signal;
-const Node = zounds.signals.Node;
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
+pub fn main(init_data: std.process.Init) !void {
+    const alloc = init_data.gpa;
 
     const config = zounds.backend_context.ContextConfig{
         .frames_per_packet = 1,
         .desired_format = .{
             .sample_format = .f32,
             .sample_rate = 44_100,
-            .channels = zounds.ChannelPosition.fromChannelCount(2),
+            .channels = zounds.fmt.ChannelPosition.fromChannelCount(2),
             .is_interleaved = true,
         },
     };
 
-    var graph = zounds.signals.Graph(.{}){
+    var graph = zounds.Graph(.{}){
         .format = config.desired_format,
     };
     var graph_ctx = graph.context();

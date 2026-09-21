@@ -32,12 +32,6 @@ pub fn main(init_data: std.process.Init) !void {
     const adsr_node = graph_ctx.getNode(adsr_hdl).?;
     _ = adsr_node; // autofix
 
-    // var osc_c = zounds.dsp.Oscillator{
-    //     .ctx = graph_ctx,
-    //     .id = "Osc:C",
-    //     .pitch = .{ .static = zounds.utils.pitchFromNote(60) },
-    // };
-    //
     var osc_c = try zounds.voices.AdditiveVoice.init(.{
         .id = "osc c",
         .ctx = graph_ctx,
@@ -47,11 +41,6 @@ pub fn main(init_data: std.process.Init) !void {
     }, alloc);
     const c_node = try graph_ctx.register(&osc_c);
 
-    // var osc_e = zounds.dsp.Oscillator{
-    //     .ctx = graph_ctx,
-    //     .id = "Osc:E",
-    //     .pitch = .{ .static = zounds.utils.pitchFromNote(65) },
-    // };
     var osc_e = try zounds.voices.AdditiveVoice.init(.{
         .id = "osc e",
         .ctx = graph_ctx,
@@ -60,12 +49,6 @@ pub fn main(init_data: std.process.Init) !void {
         .format = format,
     }, alloc);
     const e_node = try graph_ctx.register(&osc_e);
-
-    // var osc_g = zounds.dsp.Oscillator{
-    //     .ctx = graph_ctx,
-    //     .id = "Osc:G",
-    //     .pitch = .{ .static = zounds.utils.pitchFromNote(69) },
-    // };
 
     var osc_g = try zounds.voices.AdditiveVoice.init(.{
         .id = "osc g",
@@ -91,11 +74,9 @@ pub fn main(init_data: std.process.Init) !void {
 
         const field_str = try std.fmt.bufPrint(&field_name_buf, "in_{}", .{idx + 1});
         try graph_ctx.connect(chord_node.port(field_str).field_ptr, note_node.port("out").field_ptr);
-        // try graph_ctx.connect(note_node.port("amp").field_ptr, adsr_node.port("out").field_ptr);
     }
 
     // assign root signal to signal graph
-    // signal_graph.root_signal = chord_node.port("out").field_ptr.*;
     signal_graph.root_signal = chord_node.port("out").field_ptr.*;
 
     // TODO: audio context should derive its sample rate from available backend devices/formats, not the raw desired config
