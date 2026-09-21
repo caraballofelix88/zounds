@@ -35,7 +35,7 @@ pub const GraphContext = struct {
         register: *const fn (*anyopaque, Node) Error!Handle,
         deregister: *const fn (*anyopaque, Handle) Error!void,
         connect: *const fn (*anyopaque, *Signal, *Signal) Error!void,
-        next: *const fn (*anyopaque) []f32, // how to push multi-channel?
+        next: *const fn (*anyopaque) []f32, // TODO: how to push multi-channel?
 
         getSignal: *const fn (*anyopaque, Handle) f32,
         setSignal: *const fn (*anyopaque, Handle, f32) void,
@@ -399,6 +399,8 @@ pub fn Graph(comptime opts: Options) type {
 // TODO: inlet and outlet maximums should probably be supplied to generic. Fine for now, tho
 pub const Node = struct {
     ptr: *anyopaque,
+    // TODO: test out storing the backing node type as a field,
+    // base_type: type,
     src_type: []const u8,
     id: []const u8 = "x",
     num_inlets: u8 = undefined,
@@ -584,7 +586,10 @@ pub fn Ports(comptime T: anytype) type {
                 switch (info.type) {
                     DirSignal(.in) => {
                         var outer_field = &@field(t, @tagName(port));
-                        const default_val: Signal = @as(*const DirSignal(.in), @ptrCast(@alignCast(&info.defaultValue().?.*))).val;
+
+                        // DirSignals nest Signal structs, so we need
+                        // to pull the internal signal value field here.
+                        const default_val = if (info.defaultValue()) |def| def.val else default_signal;
 
                         buf[idx] = .{
                             .field_ptr = &@field(outer_field, "val"),
@@ -593,11 +598,12 @@ pub fn Ports(comptime T: anytype) type {
                         };
                     },
                     Signal => {
-                        const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value_ptr orelse &default_signal)));
+                        const default_val = info.defaultValue() orelse default_signal;
+
                         buf[idx] = .{
                             .field_ptr = &@field(t, @tagName(port)),
                             .name = info.name,
-                            .default_val = default_val.*,
+                            .default_val = default_val,
                         };
                     },
                     else => {},
@@ -617,7 +623,7 @@ pub fn Ports(comptime T: anytype) type {
                 switch (info.type) {
                     DirSignal(.out) => {
                         var outer_field = &@field(t, @tagName(port));
-                        const default_val: Signal = @as(*const DirSignal(.out), @ptrCast(@alignCast(&info.defaultValue().?.*))).val;
+                        const default_val = if (info.defaultValue()) |def| def.val else default_signal;
 
                         buf[idx] = .{
                             .field_ptr = &@field(outer_field, "val"),
@@ -627,11 +633,12 @@ pub fn Ports(comptime T: anytype) type {
                     },
 
                     Signal => {
-                        const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value_ptr orelse &default_signal)));
+                        const default_val = info.defaultValue() orelse default_signal;
+
                         buf[idx] = .{
                             .field_ptr = &@field(t, @tagName(port)),
                             .name = info.name,
-                            .default_val = default_val.*,
+                            .default_val = default_val,
                         };
                     },
                     else => {},
@@ -649,10 +656,9 @@ pub fn Ports(comptime T: anytype) type {
                     const info = std.meta.fieldInfo(T, port);
 
                     switch (info.type) {
-                        DirSignal(.in) => {
+                        DirSignal(.in), DirSignal(.out) => {
                             var outer_field = &@field(t, @tagName(port));
-
-                            const default_val: Signal = @as(*const DirSignal(.in), @ptrCast(@alignCast(&info.default_value.?.*))).val;
+                            const default_val = if (info.defaultValue()) |def| def.val else default_signal;
 
                             return .{
                                 .field_ptr = &@field(outer_field, "val"),
@@ -660,24 +666,13 @@ pub fn Ports(comptime T: anytype) type {
                                 .default_val = default_val,
                             };
                         },
-                        DirSignal(.out) => {
-                            var outer_field = &@field(t, @tagName(port));
-
-                            const default_val: Signal = @as(*const DirSignal(.out), @ptrCast(@alignCast(&info.defaultValue().?.*))).val;
-
-                            return .{
-                                .field_ptr = &@field(outer_field, "val"),
-                                .name = info.name,
-                                .default_val = default_val,
-                            };
-                        },
-
                         Signal => {
-                            const default_val: *const Signal = @as(*const Signal, @ptrCast(@alignCast(info.default_value_ptr orelse &default_signal)));
+                            const default_val = info.defaultValue() orelse default_signal;
+
                             return .{
                                 .field_ptr = &@field(t, @tagName(port)),
                                 .name = info.name,
-                                .default_val = default_val.*,
+                                .default_val = default_val,
                             };
                         },
                         else => {},
@@ -733,11 +728,17 @@ test "SignalDirs" {
 
     const P = Ports(Wobble);
 
-    try std.testing.expectEqual(P.getPort(&wobb, "base_pitch"), PortField{
-        .field_ptr = &wobb.base_pitch.val,
-        .name = "base_pitch",
-        .default_val = .{ .static = 440.0 },
-    });
+    try std.testing.expectEqual(
+        P.getPort(&wobb, "base_pitch"),
+        PortField{
+            .field_ptr = &wobb.base_pitch.val,
+            .name = "base_pitch",
+            .default_val = .{ .static = 440.0 },
+        },
+    );
 
-    try std.testing.expectEqual(P.ins(&wobb).len, 3);
+    try std.testing.expectEqual(
+        3,
+        P.ins(&wobb).len,
+    );
 }
