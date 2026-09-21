@@ -23,7 +23,7 @@ pub fn getFilterCoefficients(filter_type: FilterType, sample_freq: u32, cutoff_f
     const sin_w = @sin(w);
     const cos_w = @cos(w);
 
-    const alpha = sin_w / 2 * q;
+    const alpha = sin_w / (2 * q);
 
     switch (filter_type) {
         .low_pass => {
