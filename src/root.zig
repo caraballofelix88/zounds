@@ -9,11 +9,21 @@ pub const envelope = @import("envelope.zig");
 pub const fmt = @import("audio_format.zig");
 pub const midi = @import("midi.zig");
 pub const readers = @import("readers/readers.zig");
-pub const signals = @import("signals.zig");
 pub const utils = @import("utils.zig");
 pub const voices = @import("voices/voices.zig");
 pub const wavegen = @import("wavegen.zig");
 pub const backend_context = @import("context.zig");
+
+const old_signals = @import("signals.zig");
+pub const Node = old_signals.Node;
+pub const Graph = old_signals.Graph;
+pub const GraphOptions = old_signals.Options;
+pub const GraphContext = old_signals.GraphContext;
+pub const Handle = old_signals.Handle;
+
+const core_signal = @import("core/signal.zig");
+pub const Signal = core_signal.Signal;
+pub const Ports = core_signal.Ports;
 
 // TODO: midi client backends
 pub const Context = struct {

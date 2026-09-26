@@ -1,14 +1,14 @@
 const std = @import("std");
-const signals = @import("../signals.zig");
+const z = @import("../root");
 const clock = @import("../clock.zig");
 const wavegen = @import("../wavegen.zig");
 
 pub const Click = struct {
-    ctx: *const signals.GraphContext,
+    ctx: *const z.GraphContext,
     id: []const u8 = "click",
-    bpm: signals.Signal = .{ .static = 120.0 },
+    bpm: z.Signal = .{ .static = 120.0 },
 
-    out: signals.Signal = .{ .static = 0.0 },
+    out: z.Signal = .{ .static = 0.0 },
 
     pub const ins = .{.bpm};
     pub const outs = .{.out};
@@ -28,7 +28,7 @@ pub const Click = struct {
         }
     }
 
-    pub fn node(ptr: *Click) signals.Node {
-        return signals.Node.init(ptr, Click);
+    pub fn node(ptr: *Click) z.Node {
+        return z.Node.init(ptr, Click);
     }
 };

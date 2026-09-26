@@ -3,8 +3,8 @@ const zounds = @import("zounds");
 
 const fmt = zounds.fmt;
 
-const Signal = zounds.signals.Signal;
-const Node = zounds.signals.Node;
+const Signal = zounds.Signal;
+const Node = zounds.Node;
 
 const log = std.log.scoped(.examples_tada);
 
@@ -20,7 +20,7 @@ pub fn main(init_data: std.process.Init) !void {
 
     const config = zounds.backend_context.ContextConfig{ .frames_per_packet = 1, .desired_format = format };
 
-    var signal_graph = zounds.signals.Graph(.{ .channel_count = 2 }){ .format = config.desired_format };
+    var signal_graph = zounds.Graph(.{ .channel_count = 2 }){ .format = config.desired_format };
     var graph_ctx = signal_graph.context();
 
     // build trigger for chord envelope
@@ -83,7 +83,7 @@ pub fn main(init_data: std.process.Init) !void {
     var chord_node = graph_ctx.getNode(chord_hdl).?;
 
     // plug adsr into oscillators, plug oscillators into chord
-    const note_hdls: []const zounds.signals.Handle = &.{ c_node, e_node, g_node };
+    const note_hdls: []const zounds.Handle = &.{ c_node, e_node, g_node };
     for (note_hdls, 0..) |hdl, idx| {
         var field_name_buf: [32]u8 = undefined;
 
@@ -143,7 +143,7 @@ pub fn main(init_data: std.process.Init) !void {
 }
 
 pub fn writeFn(write_ref: *anyopaque, buf: []u8, num_frames: usize) void {
-    var graph: *zounds.signals.GraphContext = @ptrCast(@alignCast(write_ref));
+    var graph: *zounds.GraphContext = @ptrCast(@alignCast(write_ref));
 
     const sample_buf: []align(1) f32 = std.mem.bytesAsSlice(f32, buf);
 

@@ -1,19 +1,19 @@
 const std = @import("std");
-const signals = @import("../signals.zig");
+const z = @import("../root.zig");
 
 pub fn Sink(num_ins: u8) type {
     _ = num_ins; // autofix
 
     return struct {
-        ctx: *const signals.GraphContext,
+        ctx: *const z.GraphContext,
         id: []const u8 = "Sink",
         // TODO: dynamic struct fields, based on num_ins
-        in_1: signals.Signal = .{ .static = 0.0 },
-        in_2: signals.Signal = .{ .static = 0.0 },
-        in_3: signals.Signal = .{ .static = 0.0 },
-        in_4: signals.Signal = .{ .static = 0.0 },
-        amp: signals.Signal = .{ .static = 1.0 },
-        out: signals.Signal = .{ .static = 0.0 },
+        in_1: z.Signal = .{ .static = 0.0 },
+        in_2: z.Signal = .{ .static = 0.0 },
+        in_3: z.Signal = .{ .static = 0.0 },
+        in_4: z.Signal = .{ .static = 0.0 },
+        amp: z.Signal = .{ .static = 1.0 },
+        out: z.Signal = .{ .static = 0.0 },
 
         const Self = @This();
 

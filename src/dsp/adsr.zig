@@ -1,5 +1,10 @@
 const std = @import("std");
-const signals = @import("../signals.zig");
+
+const z = @import("../root.zig");
+
+const Signal = z.Signal;
+const Node = z.Node;
+
 const env = @import("../envelope.zig");
 
 pub const ADSR = struct {
@@ -8,12 +13,13 @@ pub const ADSR = struct {
 
     const Self = @This();
 
-    ctx: *const signals.GraphContext,
+    // TODO: rehome graph to core
+    ctx: *const z.GraphContext,
     id: []const u8 = "adsr",
     state: Self.State = .off,
-    trigger: signals.Signal = .{ .static = 0.0 },
+    trigger: Signal = .{ .static = 0.0 },
     prev_trigger: f32 = 0.0,
-    out: signals.Signal = .{ .static = 0.0 },
+    out: Signal = .{ .static = 0.0 },
     attack_ts: u64 = 0,
     release_ts: u64 = 0,
     prev_val: f32 = 0.0,
@@ -75,7 +81,7 @@ pub const ADSR = struct {
         adsr.out.set(val);
     }
 
-    pub fn node(ptr: *Self) signals.Node {
-        return signals.Node.init(ptr, Self);
+    pub fn node(ptr: *Self) z.signals.Node {
+        return z.Node.init(ptr, Self);
     }
 };

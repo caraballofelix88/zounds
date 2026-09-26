@@ -15,6 +15,7 @@ const Duration = union(DurationTags) {
     seconds: f32,
     samples: u32,
 
+    // TODO: should'nt millis be fractional?
     pub fn in_millis(d: Duration, sample_rate: u32) u32 {
         return switch (d) {
             .millis => |m| m,

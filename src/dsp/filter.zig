@@ -1,5 +1,5 @@
 const std = @import("std");
-const signals = @import("../signals.zig");
+const z = @import("../root.zig");
 
 // resources:
 // - https://www.w3.org/TR/audio-eq-cookbook/
@@ -53,10 +53,10 @@ pub fn getFilterCoefficients(filter_type: FilterType, sample_freq: u32, cutoff_f
 
 // Recursive biquad filter
 pub const Filter = struct {
-    ctx: *const signals.GraphContext,
+    ctx: *const z.GraphContext,
     id: []const u8 = "Filter",
-    in: signals.Signal = .{ .static = 0.0 },
-    out: signals.Signal = .{ .static = 0.0 },
+    in: z.Signal = .{ .static = 0.0 },
+    out: z.Signal = .{ .static = 0.0 },
     prev_x: [2]f32 = std.mem.zeroes([2]f32),
     prev_y: [2]f32 = std.mem.zeroes([2]f32),
     filter_type: FilterType = .low_pass,
@@ -92,7 +92,7 @@ pub const Filter = struct {
         return (b[0] / a[0]) * x + (b[1] / a[0]) * f.prev_x[0] + (b[2] / a[0]) * f.prev_x[1] - (a[1] / a[0]) * f.prev_y[0] - (a[2] / a[0]) * f.prev_y[1];
     }
 
-    pub fn node(f: *Filter) signals.Node {
-        return signals.Node.init(f, Filter);
+    pub fn node(f: *Filter) z.Node {
+        return z.Node.init(f, Filter);
     }
 };

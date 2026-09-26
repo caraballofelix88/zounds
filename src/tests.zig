@@ -2,6 +2,8 @@ const std = @import("std");
 
 pub const root = @import("root.zig");
 
+pub const dsp = @import("dsp/dsp.zig");
+
 // envelopes, ramps
 pub const envelope = @import("envelope.zig");
 
@@ -13,10 +15,13 @@ pub const coreaudio = @import("backends/coreaudio.zig");
 pub const clock = @import("clock.zig");
 pub const convert = @import("convert.zig");
 pub const signals = @import("signals.zig");
+pub const core_signal = @import("core/signal.zig");
 
 pub const genarray = @import("genarray.zig");
 
 test {
     //    std.testing.refAllDecls(@This());
     std.testing.refAllDecls(signals);
+    std.testing.refAllDecls(core_signal);
+    std.testing.refAllDecls(dsp);
 }

@@ -1,14 +1,14 @@
 const std = @import("std");
-const signals = @import("../signals.zig");
+const z = @import("../root.zig");
 const wavegen = @import("../wavegen.zig");
 
 pub const Oscillator = struct {
-    ctx: *const signals.GraphContext,
+    ctx: *const z.GraphContext,
     id: []const u8 = "oscillator",
     wavetable: []const f32 = &wavegen.sine_wave,
-    pitch: signals.Signal = .{ .static = 440.0 },
-    amp: signals.Signal = .{ .static = 1.0 },
-    out: signals.Signal = .{ .static = 0.0 },
+    pitch: z.Signal = .{ .static = 440.0 },
+    amp: z.Signal = .{ .static = 1.0 },
+    out: z.Signal = .{ .static = 0.0 },
     phase: f32 = 0.0,
 
     pub const ins = [_]std.meta.FieldEnum(Oscillator){ .pitch, .amp };
@@ -37,7 +37,7 @@ pub const Oscillator = struct {
         n.out.set(result);
     }
 
-    pub fn node(self: *Oscillator) signals.Node {
-        return signals.Node.init(self, Oscillator);
+    pub fn node(self: *Oscillator) z.Node {
+        return z.Node.init(self, Oscillator);
     }
 };

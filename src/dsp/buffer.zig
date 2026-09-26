@@ -1,9 +1,9 @@
 const std = @import("std");
-const signals = @import("../signals.zig");
+const z = @import("../root.zig");
 const AudioBuffer = @import("../audio_buffer.zig");
 
 pub const BufferPlayback = struct {
-    ctx: *const signals.GraphContext,
+    ctx: *const z.GraphContext,
     id: []const u8 = "BufferPlayback",
     head: usize = 0,
     head_inc_counter: usize = 0,
@@ -11,7 +11,7 @@ pub const BufferPlayback = struct {
 
     should_loop: bool = true,
 
-    out: signals.Signal = .{ .static = 0.0 },
+    out: z.Signal = .{ .static = 0.0 },
 
     pub const ins = .{};
     pub const outs = .{.out};
@@ -46,7 +46,7 @@ pub const BufferPlayback = struct {
         return p.ctx.sample_rate / p.buf.format.sample_rate;
     }
 
-    pub fn node(p: *BufferPlayback) signals.Node {
-        return signals.Node.init(p, BufferPlayback);
+    pub fn node(p: *BufferPlayback) z.Node {
+        return z.Node.init(p, BufferPlayback);
     }
 };

@@ -1,14 +1,14 @@
 const std = @import("std");
-const signals = @import("../signals.zig");
+const z = @import("../root.zig");
 
 pub const LFO = struct {
-    ctx: *const signals.GraphContext,
+    ctx: *const z.GraphContext,
     id: []const u8 = "wobb",
-    base_pitch: signals.Signal = .{ .static = 440.0 },
-    frequency: signals.Signal = .{ .static = 10.0 },
+    base_pitch: z.Signal = .{ .static = 440.0 },
+    frequency: z.Signal = .{ .static = 10.0 },
 
-    amp: signals.Signal = .{ .static = 10.0 },
-    out: signals.Signal = .{ .static = 0.0 },
+    amp: z.Signal = .{ .static = 10.0 },
+    out: z.Signal = .{ .static = 0.0 },
     phase: f32 = 0,
 
     pub const ins = .{ .base_pitch, .frequency, .amp };
@@ -28,7 +28,7 @@ pub const LFO = struct {
         w.out.set(result);
     }
 
-    pub fn node(ptr: *LFO) signals.Node {
-        return signals.Node.init(ptr, LFO);
+    pub fn node(ptr: *LFO) z.Node {
+        return z.Node.init(ptr, LFO);
     }
 };

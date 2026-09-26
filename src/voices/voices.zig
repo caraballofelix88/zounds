@@ -1,21 +1,21 @@
 const std = @import("std");
 const dsp = @import("../dsp/dsp.zig");
-const signals = @import("../signals.zig");
+const z = @import("../root.zig");
 
 const fmt = @import("../audio_format.zig");
 
 const log = std.log.scoped(.voices);
 
 const VoiceOpts = struct {
-    ctx: *const signals.GraphContext,
+    ctx: *const z.GraphContext,
     pitch: f32 = 50.0,
     amp: f32 = 1.0,
-    trigger: signals.Signal = .{ .static = 0.0 },
+    trigger: z.Signal = .{ .static = 0.0 },
     format: fmt.FormatData,
     id: []const u8,
 };
 
-const ChildGraphOpts: signals.Options = .{ .scratch_size = 16, .channel_count = 2, .max_node_count = 8 };
+const ChildGraphOpts: z.GraphOptions = .{ .scratch_size = 16, .channel_count = 2, .max_node_count = 8 };
 pub const AdditiveVoice = struct {
     // osc_1: dsp.Oscillator = undefined,
     // osc_2: dsp.Oscillator = undefined,
@@ -28,20 +28,20 @@ pub const AdditiveVoice = struct {
 
     // adsr: dsp.ADSR = undefined,
 
-    child_graph: *signals.Graph(ChildGraphOpts) = undefined,
+    child_graph: *z.Graph(ChildGraphOpts) = undefined,
 
-    ctx: *const signals.GraphContext = undefined,
+    ctx: *const z.GraphContext = undefined,
 
     arena: std.heap.ArenaAllocator = undefined,
 
     // pitch: signals.Signal = .{ .static = 440.0 },
-    trigger: signals.Signal = .{ .static = 0.0 },
+    trigger: z.Signal = .{ .static = 0.0 },
     //
 
-    adsr_hdl: signals.Handle = undefined,
+    adsr_hdl: z.Handle = undefined,
     adsr_state: dsp.ADSR.State = .off,
 
-    out: signals.Signal = .{ .static = 0.0 },
+    out: z.Signal = .{ .static = 0.0 },
 
     pub const ins = .{};
     pub const outs = .{.out};
@@ -50,7 +50,7 @@ pub const AdditiveVoice = struct {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const alloc = arena.allocator();
 
-        const child_graph = try alloc.create(signals.Graph(ChildGraphOpts));
+        const child_graph = try alloc.create(z.Graph(ChildGraphOpts));
         child_graph.* = .{ .format = opts.format };
 
         const child_ctx = child_graph.context();
